@@ -460,8 +460,13 @@ class TpModelWorker(BaseTpWorker):
             context_length=self.context_length,
         )
 
-    def _init_model_runner(self):
+    def get_model_runner_class(self):
         from sglang.srt.model_executor.model_runner import ModelRunner
+
+        return ModelRunner
+
+    def _init_model_runner(self):
+        ModelRunner = self.get_model_runner_class()
 
         self._model_runner = ModelRunner(
             model_config=self.model_config,

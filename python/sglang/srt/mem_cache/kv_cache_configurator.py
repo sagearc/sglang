@@ -958,6 +958,8 @@ class KVCacheConfigurator:
         mha_pool_class = (
             PageMajorMHATokenToKVPool if enable_page_major else MHATokenToKVPool
         )
+        if get_schedule().simulate_forward:
+            mha_pool_class = NoOpMHATokenToKVPool
 
         if is_dsv4_model:
             token_to_kv_pool = self._build_dsv4_kv_pool(

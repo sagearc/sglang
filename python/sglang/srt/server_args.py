@@ -795,6 +795,11 @@ class ServerArgs:
         ),
         NS("schedule"),
     ] = None
+    simulate_forward: A[
+        bool,
+        "Simulate model forward passes on CPU while exercising the real scheduler and KV cache logic. Model weights and physical KV tensors are not loaded.",
+        NS("schedule"),
+    ] = False
     chunked_prefill_size: A[
         Optional[int],
         "The maximum number of tokens in a chunk for the chunked prefill. Setting this to -1 means disabling chunked prefill.",
@@ -3584,6 +3589,10 @@ class ServerArgs:
         # Set missing default values.
         self._handle_missing_default_values()
 
+        # Resolve simulated-forward constraints before platform, graph, and
+        # model-specific backend selection.
+        self._handle_simulate_forward()
+
         # Validate PD disaggregation flags before CUDA graph config.
         self._handle_pd_disaggregation()
 
@@ -4222,6 +4231,95 @@ class ServerArgs:
             self._quantization_explicitly_unset = False
         if self.speculative_draft_model_quantization == "unquant":
             self.speculative_draft_model_quantization = None
+
+    def _handle_simulate_forward(self):
+        if not self.simulate_forward:
+            return
+
+        if not current_platform.is_cpu():
+            raise ValueError(
+                "--simulate-forward is CPU-only. Set SGLANG_USE_CPU_ENGINE=1 "
+                "before starting the server."
+            )
+        parallel_sizes = (
+            self.tp_size,
+            self.pp_size,
+            self.dp_size,
+            self.dcp_size,
+            self.attn_cp_size,
+            self.moe_dp_size,
+            self.dwdp_size,
+            self.ep_size,
+            self.nnodes,
+        )
+        if any(size != 1 for size in parallel_sizes):
+            raise ValueError(
+                "--simulate-forward currently requires single-process execution."
+            )
+        if self.speculative_algorithm or self.speculative_draft_model_path:
+            raise ValueError(
+                "--simulate-forward does not support speculative decoding."
+            )
+        if self.is_embedding or self.encoder_only:
+            raise ValueError("--simulate-forward requires a generation model.")
+
+        unsupported = []
+        if self.enable_lora:
+            unsupported.append("LoRA")
+        if self.disaggregation_mode != "null":
+            unsupported.append("prefill/decode disaggregation")
+        if self.enable_hierarchical_cache or self.enable_lmcache:
+            unsupported.append("hierarchical cache transfer")
+        if self.enable_return_hidden_states:
+            unsupported.append("hidden-state capture")
+        if self.enable_return_routed_experts or self.enable_return_indexer_topk:
+            unsupported.append("expert or indexer capture")
+        if unsupported:
+            raise ValueError(
+                "--simulate-forward does not support " + ", ".join(unsupported) + "."
+            )
+
+        # Simulated forward constructs the registered model on meta, but it
+        # never loads checkpoint quantization state or parameter storage.
+        model_overrides = json.loads(self.json_model_override_args)
+        model_overrides["quantization_config"] = None
+        self.json_model_override_args = json.dumps(model_overrides)
+        self.quantization = None
+        self._quantization_explicitly_unset = True
+        self.load_format = "dummy"
+        self.kv_cache_dtype = "auto"
+
+        # No compute backend or graph is used. Keep the ordinary non-overlap
+        # scheduler so request state and cache accounting advance synchronously.
+        self.device = "cpu"
+        self.attention_backend = "torch_native"
+        self.sampling_backend = "pytorch"
+        self.disable_overlap_schedule = True
+        self.disable_cuda_graph = True
+        self.disable_prefill_cuda_graph = True
+        self.disable_decode_cuda_graph = True
+        self.skip_server_warmup = True
+        if self.max_running_requests is None:
+            self.max_running_requests = 256
+
+        from sglang.srt.configs.model_config import AttentionArch, is_minimax_sparse
+
+        model_config = self.get_model_config()
+        model_arch = model_config.hf_config.architectures[0]
+        if model_config.is_multimodal:
+            raise ValueError("--simulate-forward does not support multimodal models.")
+        if not model_config.is_generation:
+            raise ValueError("--simulate-forward requires a text generation model.")
+        if model_config.attention_arch != AttentionArch.MHA:
+            raise ValueError("--simulate-forward does not support MLA models.")
+        if is_minimax_sparse(model_config.hf_config):
+            raise ValueError(
+                "--simulate-forward does not support sparse-attention models."
+            )
+        if get_linear_attn_spec_by_arch(model_arch) is not None:
+            raise ValueError(
+                "--simulate-forward does not support Mamba or linear-attention models."
+            )
 
     def _handle_modelscope_paths(self):
         """Resolve model / tokenizer / speculative-draft paths from the local
@@ -5167,6 +5265,10 @@ class ServerArgs:
             get_mimo_v2_fused_qkv_expected_tp_size,
             is_deepseek_dsa,
         )
+
+        if self.simulate_forward:
+            self._resolved_overrides = []
+            return
 
         if self.enable_deterministic_inference:
             self.enforce_disable_flashinfer_allreduce_fusion = True

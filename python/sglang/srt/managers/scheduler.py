@@ -907,7 +907,13 @@ class Scheduler(
         )
 
         # FIXME: move tp worker's init logic outside of the scheduler.
-        if use_mlx():
+        if self.server_args.simulate_forward:
+            from sglang.srt.managers.simulated_tp_worker import (
+                SimulatedTpModelWorker,
+            )
+
+            self.tp_worker = SimulatedTpModelWorker(**worker_kwargs)
+        elif use_mlx():
             from sglang.srt.hardware_backend.mlx.tp_worker import MlxTpModelWorker
 
             self.tp_worker = MlxTpModelWorker(**worker_kwargs)

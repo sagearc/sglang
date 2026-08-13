@@ -1,0 +1,20 @@
+FROM docker.io/lmsysorg/sglang:v0.5.17-xeon@sha256:227f00b98fd4d94afa09aa52283a17b62e547d130d8e25420581bde7a1b22431
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+LABEL org.opencontainers.image.title="SGLang simulated forward"
+LABEL org.opencontainers.image.version="v0.5.17-simulated-forward"
+LABEL org.opencontainers.image.base.name="docker.io/lmsysorg/sglang:v0.5.17-xeon"
+LABEL org.opencontainers.image.revision="017ec9afcd95c93a50484a879f023e6e3fea9b19"
+
+ENV PYTHONPATH=/sgl-workspace/sglang/python
+ENV SGLANG_SIMULATED_FORWARD_COMMIT=017ec9afcd95c93a50484a879f023e6e3fea9b19
+
+COPY python/sglang/srt/managers/scheduler.py /sgl-workspace/sglang/python/sglang/srt/managers/scheduler.py
+COPY python/sglang/srt/managers/simulated_tp_worker.py /sgl-workspace/sglang/python/sglang/srt/managers/simulated_tp_worker.py
+COPY python/sglang/srt/managers/tp_worker.py /sgl-workspace/sglang/python/sglang/srt/managers/tp_worker.py
+COPY python/sglang/srt/mem_cache/kv_cache_configurator.py /sgl-workspace/sglang/python/sglang/srt/mem_cache/kv_cache_configurator.py
+COPY python/sglang/srt/model_executor/simulated_model_runner.py /sgl-workspace/sglang/python/sglang/srt/model_executor/simulated_model_runner.py
+COPY python/sglang/srt/server_args.py /sgl-workspace/sglang/python/sglang/srt/server_args.py

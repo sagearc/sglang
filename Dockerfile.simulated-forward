@@ -1,4 +1,15 @@
-FROM docker.io/lmsysorg/sglang:v0.5.17-xeon@sha256:227f00b98fd4d94afa09aa52283a17b62e547d130d8e25420581bde7a1b22431
+# Build from the repository root with:
+# docker buildx build --platform linux/amd64 \
+#   --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" \
+#   -f Dockerfile.simulated-forward .
+
+ARG SGLANG_BASE_IMAGE=docker.io/lmsysorg/sglang:v0.5.17-xeon@sha256:227f00b98fd4d94afa09aa52283a17b62e547d130d8e25420581bde7a1b22431
+FROM ${SGLANG_BASE_IMAGE}
+
+ARG SGLANG_BASE_IMAGE
+ARG SGLANG_UPSTREAM_REVISION=29481685462732237d80d86076d6563e1f658102
+ARG SOURCE_REPOSITORY=https://github.com/sagearc/sglang
+ARG SOURCE_REVISION=unknown
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libssl-dev \
@@ -6,11 +17,18 @@ RUN apt-get update \
 
 LABEL org.opencontainers.image.title="SGLang simulated forward"
 LABEL org.opencontainers.image.version="v0.5.17-simulated-forward"
-LABEL org.opencontainers.image.base.name="docker.io/lmsysorg/sglang:v0.5.17-xeon"
-LABEL org.opencontainers.image.revision="017ec9afcd95c93a50484a879f023e6e3fea9b19"
+LABEL org.opencontainers.image.description="SGLang v0.5.17 Xeon image with simulated forward execution"
+LABEL org.opencontainers.image.source="${SOURCE_REPOSITORY}"
+LABEL org.opencontainers.image.revision="${SOURCE_REVISION}"
+LABEL org.opencontainers.image.url="${SOURCE_REPOSITORY}/tree/${SOURCE_REVISION}"
+LABEL org.opencontainers.image.documentation="${SOURCE_REPOSITORY}/blob/${SOURCE_REVISION}/Dockerfile.simulated-forward"
+LABEL org.opencontainers.image.base.name="${SGLANG_BASE_IMAGE}"
+LABEL io.sglang.upstream.revision="${SGLANG_UPSTREAM_REVISION}"
 
 ENV PYTHONPATH=/sgl-workspace/sglang/python
-ENV SGLANG_SIMULATED_FORWARD_COMMIT=017ec9afcd95c93a50484a879f023e6e3fea9b19
+ENV SGLANG_SIMULATED_FORWARD_COMMIT=${SOURCE_REVISION}
+
+COPY Dockerfile.simulated-forward /usr/share/doc/sglang/Dockerfile.simulated-forward
 
 COPY python/sglang/srt/managers/scheduler.py /sgl-workspace/sglang/python/sglang/srt/managers/scheduler.py
 COPY python/sglang/srt/managers/simulated_tp_worker.py /sgl-workspace/sglang/python/sglang/srt/managers/simulated_tp_worker.py

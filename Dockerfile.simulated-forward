@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 # Build from the repository root with:
 # docker buildx build --platform linux/amd64 \
 #   --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" \
@@ -9,7 +11,8 @@ FROM ${SGLANG_BASE_IMAGE}
 ARG SGLANG_BASE_IMAGE
 ARG SGLANG_UPSTREAM_REVISION=29481685462732237d80d86076d6563e1f658102
 ARG SOURCE_REPOSITORY=https://github.com/sagearc/sglang
-ARG SOURCE_REVISION=unknown
+ARG SOURCE_RAW_BASE=https://raw.githubusercontent.com/sagearc/sglang
+ARG SOURCE_REVISION=simulated-forward-v0.5.17
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libssl-dev \
@@ -28,11 +31,10 @@ LABEL io.sglang.upstream.revision="${SGLANG_UPSTREAM_REVISION}"
 ENV PYTHONPATH=/sgl-workspace/sglang/python
 ENV SGLANG_SIMULATED_FORWARD_COMMIT=${SOURCE_REVISION}
 
-COPY Dockerfile.simulated-forward /usr/share/doc/sglang/Dockerfile.simulated-forward
-
-COPY python/sglang/srt/managers/scheduler.py /sgl-workspace/sglang/python/sglang/srt/managers/scheduler.py
-COPY python/sglang/srt/managers/simulated_tp_worker.py /sgl-workspace/sglang/python/sglang/srt/managers/simulated_tp_worker.py
-COPY python/sglang/srt/managers/tp_worker.py /sgl-workspace/sglang/python/sglang/srt/managers/tp_worker.py
-COPY python/sglang/srt/mem_cache/kv_cache_configurator.py /sgl-workspace/sglang/python/sglang/srt/mem_cache/kv_cache_configurator.py
-COPY python/sglang/srt/model_executor/simulated_model_runner.py /sgl-workspace/sglang/python/sglang/srt/model_executor/simulated_model_runner.py
-COPY python/sglang/srt/server_args.py /sgl-workspace/sglang/python/sglang/srt/server_args.py
+ADD --chmod=0644 ${SOURCE_RAW_BASE}/${SOURCE_REVISION}/Dockerfile.simulated-forward /usr/share/doc/sglang/Dockerfile.simulated-forward
+ADD --chmod=0644 ${SOURCE_RAW_BASE}/${SOURCE_REVISION}/python/sglang/srt/managers/scheduler.py /sgl-workspace/sglang/python/sglang/srt/managers/scheduler.py
+ADD --chmod=0644 ${SOURCE_RAW_BASE}/${SOURCE_REVISION}/python/sglang/srt/managers/simulated_tp_worker.py /sgl-workspace/sglang/python/sglang/srt/managers/simulated_tp_worker.py
+ADD --chmod=0644 ${SOURCE_RAW_BASE}/${SOURCE_REVISION}/python/sglang/srt/managers/tp_worker.py /sgl-workspace/sglang/python/sglang/srt/managers/tp_worker.py
+ADD --chmod=0644 ${SOURCE_RAW_BASE}/${SOURCE_REVISION}/python/sglang/srt/mem_cache/kv_cache_configurator.py /sgl-workspace/sglang/python/sglang/srt/mem_cache/kv_cache_configurator.py
+ADD --chmod=0644 ${SOURCE_RAW_BASE}/${SOURCE_REVISION}/python/sglang/srt/model_executor/simulated_model_runner.py /sgl-workspace/sglang/python/sglang/srt/model_executor/simulated_model_runner.py
+ADD --chmod=0644 ${SOURCE_RAW_BASE}/${SOURCE_REVISION}/python/sglang/srt/server_args.py /sgl-workspace/sglang/python/sglang/srt/server_args.py

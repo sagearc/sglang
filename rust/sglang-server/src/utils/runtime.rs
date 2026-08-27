@@ -176,7 +176,7 @@ pub fn start_render(cfg: RuntimeConfig) -> Result<RenderRuntime, String> {
                 .build()
                 .expect("build render runtime");
             let renderer = Arc::new(RendererService::new(cfg.server_args.clone(), render_tx));
-            runtime.block_on(http_server::app::serve_render(
+            runtime.block_on(api_server::app::serve_render(
                 listener,
                 cfg.server_args,
                 renderer,

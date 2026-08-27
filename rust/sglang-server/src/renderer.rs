@@ -11,7 +11,7 @@ use futures::future::try_join_all;
 use serde::Serialize;
 use tokio::sync::oneshot;
 
-use crate::http_server::openai::{
+use crate::api_server::openai::{
     ChatFormatter, OpenAIRequestError, load_chat_support, lower_chat_requests,
     lower_completion_requests,
 };

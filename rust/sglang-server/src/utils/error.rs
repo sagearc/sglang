@@ -48,5 +48,13 @@ impl Error {
     }
 }
 
+impl From<sglang_renderer::RendererError> for Error {
+    fn from(error: sglang_renderer::RendererError) -> Self {
+        match error {
+            sglang_renderer::RendererError::Validation(message) => Self::Validation(message),
+        }
+    }
+}
+
 #[allow(dead_code)]
 pub type Result<T> = std::result::Result<T, Error>;

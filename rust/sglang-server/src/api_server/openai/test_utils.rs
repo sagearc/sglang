@@ -98,11 +98,13 @@ pub(super) fn server_args() -> Arc<ServerArgs> {
 }
 
 pub(super) fn app_state(senders: Senders) -> Arc<super::AppState> {
+    let server_args = server_args();
+    let request_lowerer = super::request_lowerer(&server_args);
     Arc::new(super::AppState {
         senders,
         response_buf: 8,
-        server_args: server_args(),
-        chat_formatter: None,
+        server_args,
+        request_lowerer,
         response_activity: Default::default(),
     })
 }

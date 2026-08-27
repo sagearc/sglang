@@ -679,6 +679,42 @@ pub struct MmData {
     pub mm_hashes: Vec<String>,
 }
 
+impl From<sglang_renderer::GenerationInput> for GenerateRequest {
+    fn from(request: sglang_renderer::GenerationInput) -> Self {
+        let (rid, text, input_ids, skip_special_tokens, options) = match request {
+            sglang_renderer::GenerationInput::Text(request) => (
+                request.rid,
+                Some(request.text),
+                None,
+                request.skip_special_tokens,
+                request.options,
+            ),
+            sglang_renderer::GenerationInput::TokenIds(request) => (
+                request.rid,
+                None,
+                Some(request.input_ids),
+                false,
+                request.options,
+            ),
+        };
+        Self {
+            rid: Rid::from_client(&rid),
+            text,
+            input_ids,
+            skip_special_tokens,
+            sampling_params: options.sampling_params,
+            stream: options.stream,
+            return_logprob: options.return_logprob,
+            logprob_start_len: options.logprob_start_len,
+            top_logprobs_num: options.top_logprobs_num,
+            token_ids_logprob: options.token_ids_logprob,
+            return_hidden_states: options.return_hidden_states,
+            return_text_in_logprobs: options.return_text_in_logprobs,
+            ..Default::default()
+        }
+    }
+}
+
 impl GenerateRequest {
     /// True when the client already supplied token ids → skip tokenization.
     pub fn already_tokenized(&self) -> bool {

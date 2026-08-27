@@ -13,17 +13,17 @@ use crate::tokenizer_manager::from_scheduler::ActivityCounter;
 use crate::tokenizer_manager::wiring::Senders;
 
 /// Shared handler state: submission handles, immutable server configuration,
-/// and the API-owned chat formatter.
+/// and engine-free OpenAI request lowering.
 ///
 /// axum clones the router state into **every** request, so it is mounted as
 /// `Arc<AppState>` — one refcount bump per request instead of cloning each
-/// `flume::Sender` and the chat formatter. Deliberately not `Clone`, so it
+/// `flume::Sender` and the lowerer. Deliberately not `Clone`, so it
 /// can only be shared through that `Arc`.
 pub(super) struct AppState {
     pub(super) senders: Senders,
     pub(super) response_buf: usize,
     pub(super) server_args: Arc<ServerArgs>,
-    pub(super) chat_formatter: Option<openai::ChatFormatter>,
+    pub(super) request_lowerer: sglang_renderer::OpenAIRequestLowerer,
     /// Response heartbeat (bumped per drained ring frame).
     pub(super) response_activity: ActivityCounter,
 }
@@ -40,12 +40,12 @@ pub async fn serve(
     // aborted with the api runtime.
     shutdown: flume::Receiver<()>,
 ) {
-    let chat_formatter = openai::load_chat_support(&server_args);
+    let request_lowerer = openai::request_lowerer(&server_args);
     let state = Arc::new(AppState {
         senders,
         response_buf,
         server_args: server_args.clone(),
-        chat_formatter,
+        request_lowerer,
         response_activity,
     });
     // Each endpoint module registers its own routes and merges here.

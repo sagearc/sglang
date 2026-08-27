@@ -13,10 +13,7 @@ mod chat;
 mod completions;
 mod models;
 mod reasoning;
-mod template;
 mod tools;
-
-pub(super) use template::ChatFormatter;
 
 use super::app::AppState;
 use super::frame::OutputAccumulator;
@@ -28,8 +25,9 @@ use crate::message::request::{GenerateRequest, RequestKind};
 use crate::message::response::{ChunkEvent, ResponseItem};
 use crate::tokenizer_manager::tokenizer;
 use crate::utils::response::error_response;
-
-const MAX_OPENAI_CHOICES: usize = 4096;
+use sglang_renderer::{
+    ChatFormatter, OpenAIRequestLowerer, RendererConfig, SamplingDefaults, load_chat_formatter,
+};
 
 /// The routes this module owns, mounted by `api_server::serve`.
 pub(super) fn routes() -> Router<Arc<AppState>> {
@@ -44,7 +42,7 @@ pub(super) fn routes() -> Router<Arc<AppState>> {
 /// encodes); the formatter needs at most `tokenizer_config.json` — a built-in
 /// `--chat-template` name or a model-path-inferred legacy template resolve
 /// without it, so its absence must not disable chat.
-pub(super) fn load_chat_support(server_args: &ServerArgs) -> Option<ChatFormatter> {
+fn load_chat_support(server_args: &ServerArgs) -> Option<ChatFormatter> {
     // Chat needs the tokenizer pool behind it: under `skip_tokenizer_init`
     // there is none (text cannot be submitted), so chat is disabled.
     if server_args.skip_tokenizer_init || server_args.tokenizer_path.is_empty() {
@@ -56,7 +54,7 @@ pub(super) fn load_chat_support(server_args: &ServerArgs) -> Option<ChatFormatte
         "tokenizer_config.json",
     );
 
-    match template::load_chat_formatter(
+    match load_chat_formatter(
         config_file.as_deref(),
         (!server_args.model_path.is_empty()).then_some(server_args.model_path.as_str()),
         server_args.chat_template.as_deref(),
@@ -73,6 +71,20 @@ pub(super) fn load_chat_support(server_args: &ServerArgs) -> Option<ChatFormatte
             None
         }
     }
+}
+
+pub(super) fn request_lowerer(server_args: &ServerArgs) -> OpenAIRequestLowerer {
+    OpenAIRequestLowerer::new(
+        RendererConfig {
+            served_model_name: server_args.served_model_name.clone(),
+            tool_call_parser: server_args.tool_call_parser.clone(),
+            default_sampling_params: SamplingDefaults {
+                temperature: server_args.model_config.default_sampling_params.temperature,
+                top_p: server_args.model_config.default_sampling_params.top_p,
+            },
+        },
+        load_chat_support(server_args),
+    )
 }
 
 fn unix_seconds() -> u64 {
@@ -197,21 +209,6 @@ fn indexed_decode_stream(
         }
     })
     .boxed()
-}
-
-fn contains_media(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::Array(values) => values.iter().any(contains_media),
-        serde_json::Value::Object(object) => {
-            object.keys().any(|key| {
-                matches!(
-                    key.as_str(),
-                    "image_url" | "video_url" | "input_audio" | "audio_url" | "file"
-                )
-            }) || object.values().any(contains_media)
-        }
-        _ => false,
-    }
 }
 
 #[cfg(test)]

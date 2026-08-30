@@ -19,6 +19,7 @@ use std::thread::JoinHandle;
 
 use crate::message::config::RuntimeConfig;
 use crate::message::detok::DetokMsg;
+use crate::renderer::{TokenizationJob, new_renderer_service, new_request_lowerer};
 
 use super::threads::{join_all_with_timeout, plan_cores, spawn_pool};
 use crate::tokenizer_manager::channel::{
@@ -59,6 +60,13 @@ pub struct Runtime {
     shutdown_tx: Mutex<Option<flume::Sender<()>>>,
 }
 
+/// Live standalone renderer. Unlike [`Runtime`], it owns only the HTTP runtime
+/// and engine-free text preparation workers.
+pub struct RenderRuntime {
+    threads: Mutex<Vec<JoinHandle<()>>>,
+    shutdown_tx: Mutex<Option<flume::Sender<()>>>,
+}
+
 /// Deadline for joining worker threads on shutdown. Past it we abandon the join
 /// so process teardown can't deadlock on a worker that somehow failed to exit.
 const SHUTDOWN_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -85,14 +93,7 @@ impl Runtime {
 
     /// Stop the runtime and join every worker thread (with a bounded wait).
     pub fn request_shutdown(&self) {
-        drop(self.shutdown_tx.lock().unwrap().take());
-        // Idempotent: a `Drop` after an explicit shutdown finds nothing to join.
-        let handles = std::mem::take(&mut *self.threads.lock().unwrap());
-        if !join_all_with_timeout(handles, SHUTDOWN_JOIN_TIMEOUT) {
-            tracing::warn!(
-                "shutdown: workers did not exit within {SHUTDOWN_JOIN_TIMEOUT:?}; abandoning join"
-            );
-        }
+        request_shutdown(&self.threads, &self.shutdown_tx);
     }
 }
 
@@ -102,8 +103,90 @@ impl Drop for Runtime {
     }
 }
 
-/// Boot the whole frontend. Returns once threads are spawned (non-blocking).
-/// `Err` on a startup misconfiguration (e.g. no tokenizer for a non-skip server).
+impl RenderRuntime {
+    pub fn request_shutdown(&self) {
+        request_shutdown(&self.threads, &self.shutdown_tx);
+    }
+}
+
+impl Drop for RenderRuntime {
+    fn drop(&mut self) {
+        self.request_shutdown();
+    }
+}
+
+fn request_shutdown(
+    threads: &Mutex<Vec<JoinHandle<()>>>,
+    shutdown_tx: &Mutex<Option<flume::Sender<()>>>,
+) {
+    drop(shutdown_tx.lock().unwrap().take());
+    // Idempotent: a `Drop` after an explicit shutdown finds nothing to join.
+    let handles = std::mem::take(&mut *threads.lock().unwrap());
+    if !join_all_with_timeout(handles, SHUTDOWN_JOIN_TIMEOUT) {
+        tracing::warn!(
+            "shutdown: workers did not exit within {SHUTDOWN_JOIN_TIMEOUT:?}; abandoning join"
+        );
+    }
+}
+
+/// Boot the standalone text renderer. No engine ingress/egress rings,
+/// scheduler-facing channels, detokenizer, or multimodal workers are created.
+pub fn start_render(cfg: RuntimeConfig) -> Result<RenderRuntime, String> {
+    if cfg.server_args.skip_tokenizer_init {
+        return Err("standalone rendering requires a tokenizer".into());
+    }
+    let tokenizer = tokenizer::load_tokenizer(
+        (!cfg.server_args.tokenizer_path.is_empty()).then_some(&*cfg.server_args.tokenizer_path),
+        cfg.server_args.revision.as_deref(),
+        false,
+    )?
+    .ok_or_else(|| "standalone rendering requires a tokenizer".to_owned())?;
+    let text_tokenizer: Arc<dyn tokenizer::TextTokenizer> =
+        Arc::new(tokenizer::DynamoTokenizer::new(tokenizer));
+    let listener = bind_tcp_listener(cfg.rust_server_args.http_addr).map_err(|error| {
+        format!(
+            "binding render listener on {} failed: {error}",
+            cfg.rust_server_args.http_addr
+        )
+    })?;
+    let (render_tx, render_rx) =
+        flume::bounded::<TokenizationJob>(cfg.rust_server_args.channel_cap);
+    let mut threads = Vec::new();
+    spawn_pool(
+        "renderer",
+        None,
+        cfg.server_args.tokenizer_worker_num,
+        &mut threads,
+        |_| tokenizer::TokenizerWorker::new(render_rx.clone(), None, text_tokenizer.clone()),
+    );
+    let (shutdown_tx, shutdown_rx) = flume::unbounded::<()>();
+    let handle = std::thread::Builder::new()
+        .name("render-runtime".into())
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(cfg.rust_server_args.http_api_worker_num.max(1))
+                .enable_all()
+                .build()
+                .expect("build render runtime");
+            let renderer = Arc::new(new_renderer_service(cfg.server_args.clone(), render_tx));
+            runtime.block_on(api_server::app::serve_render(
+                listener,
+                cfg.server_args,
+                renderer,
+                shutdown_rx,
+            ));
+        })
+        .map_err(|error| format!("spawn render runtime: {error}"))?;
+    threads.push(handle);
+    Ok(RenderRuntime {
+        threads: Mutex::new(threads),
+        shutdown_tx: Mutex::new(Some(shutdown_tx)),
+    })
+}
+
+/// Boot the whole frontend. Returns once threads are spawned (non-blocking),
+/// so the Python caller regains control of the GIL immediately. `Err` on a
+/// startup misconfiguration (e.g. no tokenizer for a non-skip server).
 pub fn start(cfg: RuntimeConfig) -> Result<Runtime, String> {
     let (shutdown_tx, shutdown_rx) = flume::unbounded::<()>();
     let mut threads = Vec::new();
@@ -119,7 +202,7 @@ pub fn start(cfg: RuntimeConfig) -> Result<Runtime, String> {
     let (tok_manager_tx, tok_manager_rx) =
         flume::bounded::<TmEvent>(cfg.rust_server_args.channel_cap);
     let (tokenizer_tx, tokenizer_rx) =
-        flume::bounded::<crate::message::request::Request>(cfg.rust_server_args.channel_cap);
+        flume::bounded::<TokenizationJob>(cfg.rust_server_args.channel_cap);
     // Encoding → MM worker pool. Bounded like the other stage edges so a slow
     // pool back-pressures instead of buffering unboundedly.
     let (mm_worker_tx, mm_worker_rx) =
@@ -136,6 +219,7 @@ pub fn start(cfg: RuntimeConfig) -> Result<Runtime, String> {
     // Aborts get their own UNBOUNDED lane: on the bounded inbox they are dropped
     // exactly under the overload that makes them necessary (see `Senders::abort`).
     let (abort_tx, abort_rx) = flume::unbounded::<crate::tokenizer_manager::wiring::AbortSource>();
+    let lowerer = Arc::new(new_request_lowerer(&cfg.server_args));
     let senders = Senders {
         tok_manager_tx: tok_manager_tx.clone(),
         abort_tx: abort_tx.clone(),
@@ -207,7 +291,7 @@ pub fn start(cfg: RuntimeConfig) -> Result<Runtime, String> {
             |_i| {
                 tokenizer::TokenizerWorker::new(
                     tokenizer_rx.clone(),
-                    tok_manager_tx.clone(),
+                    Some(tok_manager_tx.clone()),
                     tokenizer.clone(),
                 )
             },
@@ -276,6 +360,7 @@ pub fn start(cfg: RuntimeConfig) -> Result<Runtime, String> {
         let api_cores = plan.as_ref().map(|p| p.api.clone());
         let senders = senders.clone();
         let response_activity = response_activity.clone();
+        let lowerer = lowerer.clone();
         let shutdown_rx = shutdown_rx.clone();
         // Bind synchronously so an unavailable port (EADDRINUSE) is a hard
         // startup error. The `?` drops `shutdown_tx`/`senders`, which stops the
@@ -305,6 +390,7 @@ pub fn start(cfg: RuntimeConfig) -> Result<Runtime, String> {
                     senders,
                     cfg.rust_server_args.channel_cap,
                     cfg.server_args.clone(),
+                    lowerer,
                     // Response heartbeat watched by `/health_generate`.
                     response_activity,
                     shutdown_rx,
@@ -329,7 +415,7 @@ pub fn start(cfg: RuntimeConfig) -> Result<Runtime, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::config::{RuntimeConfig, RustServerServerArgs, ServerArgs};
+    use crate::message::config::{ModelConfig, RuntimeConfig, RustServerServerArgs, ServerArgs};
 
     /// Minimal boot config: no tokenizer load, complete `model_config` (from
     /// `Default`), unified role.
@@ -374,6 +460,49 @@ mod tests {
             std::net::TcpStream::connect(addr).is_err(),
             "port still accepting connections after shutdown",
         );
+    }
+
+    /// The standalone renderer boots from tokenizer metadata alone and owns no
+    /// scheduler-facing runtime. Its handle still provides bounded shutdown.
+    #[test]
+    fn render_runtime_starts_and_closes_listener() {
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = probe.local_addr().unwrap();
+        drop(probe);
+        let tokenizer_fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../experimental/sgl-router/tests/fixtures/tiny_tokenizer.json")
+            .canonicalize()
+            .unwrap();
+        let tokenizer_path = std::env::temp_dir().join(format!(
+            "sglang-render-tokenizer-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir(&tokenizer_path).unwrap();
+        std::fs::copy(tokenizer_fixture, tokenizer_path.join("tokenizer.json")).unwrap();
+        let server_args = ServerArgs {
+            served_model_name: "model".into(),
+            tokenizer_path: tokenizer_path.to_string_lossy().into_owned(),
+            tokenizer_worker_num: 1,
+            model_config: ModelConfig {
+                context_len: 2048,
+                vocab_size: 32000,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let cfg = RuntimeConfig {
+            rust_server_args: RustServerServerArgs {
+                http_addr: addr,
+                http_api_worker_num: 1,
+                ..Default::default()
+            },
+            server_args: Arc::new(server_args),
+        };
+        let runtime = start_render(cfg).expect("start renderer");
+        assert!(std::net::TcpStream::connect(addr).is_ok());
+        runtime.request_shutdown();
+        assert!(std::net::TcpStream::connect(addr).is_err());
+        std::fs::remove_dir_all(tokenizer_path).unwrap();
     }
 
     /// Regression: shutdown must return promptly even with an in-flight

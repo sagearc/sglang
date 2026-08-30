@@ -7,23 +7,24 @@ use std::sync::Arc;
 use axum::Router;
 
 use super::disaggregation::bootstrap as pd_bootstrap;
-use super::{common, log, native_api, openai};
+use super::{common, log, native_api, openai, render};
+use crate::frontend::FrontendHandle;
 use crate::message::config::ServerArgs;
+use crate::renderer::{RendererService, RequestLowerer};
 use crate::tokenizer_manager::from_scheduler::ActivityCounter;
 use crate::tokenizer_manager::wiring::Senders;
 
-/// Shared handler state: submission handles, immutable server configuration,
-/// and the API-owned chat formatter.
+/// Shared inference handler state: the protocol-neutral frontend handle,
+/// immutable server configuration, and engine-free OpenAI request lowerer.
 ///
 /// axum clones the router state into **every** request, so it is mounted as
 /// `Arc<AppState>` — one refcount bump per request instead of cloning each
-/// `flume::Sender` and the chat formatter. Deliberately not `Clone`, so it
+/// `flume::Sender` and the lowerer. Deliberately not `Clone`, so it
 /// can only be shared through that `Arc`.
 pub(super) struct AppState {
-    pub(super) senders: Senders,
-    pub(super) response_buf: usize,
+    pub(super) frontend: FrontendHandle,
     pub(super) server_args: Arc<ServerArgs>,
-    pub(super) chat_formatter: Option<openai::ChatFormatter>,
+    pub(super) lowerer: Arc<RequestLowerer>,
     /// Response heartbeat (bumped per drained ring frame).
     pub(super) response_activity: ActivityCounter,
 }
@@ -33,6 +34,7 @@ pub async fn serve(
     senders: Senders,
     response_buf: usize,
     server_args: Arc<ServerArgs>,
+    lowerer: Arc<RequestLowerer>,
     response_activity: ActivityCounter,
     // The runtime's shutdown signal, shared with every worker stage: it fires
     // (disconnects) when `Runtime::request_shutdown` drops the sender, at
@@ -40,12 +42,10 @@ pub async fn serve(
     // aborted with the api runtime.
     shutdown: flume::Receiver<()>,
 ) {
-    let chat_formatter = openai::load_chat_support(&server_args);
     let state = Arc::new(AppState {
-        senders,
-        response_buf,
+        frontend: FrontendHandle::new(senders, response_buf),
         server_args: server_args.clone(),
-        chat_formatter,
+        lowerer,
         response_activity,
     });
     // Each endpoint module registers its own routes and merges here.
@@ -77,6 +77,24 @@ pub async fn serve(
     // Apply logging and access log middleware.
     let app = log::apply(app, &server_args);
 
+    serve_http(listener, app, shutdown).await;
+}
+
+/// Serve the engine-free, text-only OpenAI render surface. This state has no
+/// scheduler channels, detokenizer, request FSM, or multimodal workers.
+pub(crate) async fn serve_render(
+    listener: std::net::TcpListener,
+    server_args: Arc<ServerArgs>,
+    renderer: Arc<RendererService>,
+    shutdown: flume::Receiver<()>,
+) {
+    let app = render::routes(render::RenderState::new(renderer))
+        .layer(axum::extract::DefaultBodyLimit::disable());
+    let app = log::apply(app, &server_args);
+    serve_http(listener, app, shutdown).await;
+}
+
+async fn serve_http(listener: std::net::TcpListener, app: Router, shutdown: flume::Receiver<()>) {
     // The listener was already bound synchronously in `runtime::start` (so a port
     // conflict fails startup); adopt it into the tokio reactor here.
     let listener = match tokio::net::TcpListener::from_std(listener) {

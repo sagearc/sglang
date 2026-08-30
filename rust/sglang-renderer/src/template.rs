@@ -18,7 +18,7 @@ use dynamo_renderer::{ChatTemplate, ContextMixins, PromptContextMixin, PromptFor
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::message::types::OneOrMany;
+use crate::OneOrMany;
 
 const SUPPORTED_STYLES: &[&str] = &[
     "ADD_COLON_SINGLE",
@@ -752,7 +752,7 @@ pub(super) enum TemplateError {
     UnsupportedRole { role: &'static str },
 }
 
-pub(super) fn load_chat_formatter(
+pub(crate) fn load_chat_formatter(
     config_file: Option<&str>,
     model_path: Option<&str>,
     chat_template_arg: Option<&str>,
@@ -1061,7 +1061,7 @@ fn parse_legacy_template(value: &Value, path: &Path) -> Result<LegacySpec, Templ
     })
 }
 
-pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
+pub(crate) fn builtin_template(name: &str) -> Option<LegacySpec> {
     let spec = match name {
         "llama-2" => LegacySpec {
             name: name.into(),

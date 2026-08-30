@@ -19,10 +19,17 @@ use serde_json::json;
 use tower::util::ServiceExt;
 
 use super::{openai_error, routes};
+use crate::frontend::FrontendHandle;
 use crate::message::config::ServerArgs;
 use crate::message::ids::Rid;
 use crate::message::response::{ChunkEvent, ResponseItem};
-use crate::tokenizer_manager::wiring::Senders;
+use crate::message::types::TokenIds;
+use crate::renderer::{PreprocessJob, new_renderer_service};
+use crate::runtime::Runnable;
+use crate::tokenizer_manager::to_scheduler::Limits;
+use crate::tokenizer_manager::tokenizer::{TextTokenizer, TokenizerWorker};
+use crate::tokenizer_manager::wiring::{Senders, TmEvent};
+use crate::utils::error::Error;
 
 pub(super) fn senders() -> Senders {
     Senders {
@@ -98,11 +105,24 @@ pub(super) fn server_args() -> Arc<ServerArgs> {
 }
 
 pub(super) fn app_state(senders: Senders) -> Arc<super::AppState> {
+    struct TestTokenizer;
+    impl TextTokenizer for TestTokenizer {
+        fn encode(&self, text: &str) -> Result<TokenIds, sglang_renderer::RendererError> {
+            Ok(text.split_whitespace().map(|_| 7).collect())
+        }
+    }
+
+    let server_args = server_args();
+    let limits = Limits::from(&*server_args);
+    let (jobs, worker_jobs) = flume::unbounded::<PreprocessJob>();
+    std::thread::spawn(move || {
+        TokenizerWorker::new(worker_jobs, None, Arc::new(TestTokenizer), limits).run()
+    });
+    let renderer = Arc::new(new_renderer_service(server_args.clone(), jobs));
     Arc::new(super::AppState {
-        senders,
-        response_buf: 8,
-        server_args: server_args(),
-        chat_formatter: None,
+        frontend: FrontendHandle::new(senders, 8),
+        server_args,
+        renderer,
         response_activity: Default::default(),
     })
 }
@@ -227,6 +247,46 @@ async fn completions_handler_validates_before_submit() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// OpenAI inference lowers protocol fields before submission, but the request
+/// must still enter the shared FSM as text. The FSM, rather than the renderer's
+/// prepare-only backend, owns inference tokenization.
+#[tokio::test]
+async fn completions_enter_the_fsm_before_tokenization() {
+    let (tm_tx, tm_rx) = flume::unbounded();
+    let mut frontend_senders = senders();
+    frontend_senders.tok_manager_tx = tm_tx;
+    let app = routes().with_state(app_state(frontend_senders));
+
+    let response = tokio::spawn(post_json(
+        app,
+        "/v1/completions",
+        json!({"model": "model", "prompt": "two words"}),
+    ));
+    let TmEvent::Intake(request) = tm_rx.recv_async().await.unwrap() else {
+        panic!("OpenAI request must enter through the FSM intake lane")
+    };
+    let crate::message::request::RequestKind::Generate(generate) = &request.kind else {
+        panic!("completion must lower to a generate request")
+    };
+    assert_eq!(generate.text.as_deref(), Some("two words"));
+    assert!(
+        generate.input_ids.is_none(),
+        "full inference must leave tokenization to the shared FSM"
+    );
+    assert!(
+        !generate.sampling_params.is_normalized,
+        "the shared FSM must own sampling normalization"
+    );
+
+    request
+        .sink
+        .try_send(ResponseItem::Error(Error::Validation(
+            "test terminal".into(),
+        )))
+        .unwrap();
+    assert_eq!(response.await.unwrap().status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

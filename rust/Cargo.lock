@@ -3697,6 +3697,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sglang-renderer"
+version = "0.1.0"
+dependencies = [
+ "dynamo-parsers",
+ "dynamo-protocols",
+ "dynamo-renderer",
+ "serde_json",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "sglang-server"
 version = "0.1.0"
 dependencies = [
@@ -3723,6 +3735,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sglang-mm",
+ "sglang-renderer",
  "socket2 0.6.5",
  "thiserror",
  "tokio",

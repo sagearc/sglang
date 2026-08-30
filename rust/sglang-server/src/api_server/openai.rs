@@ -12,11 +12,10 @@ use tokio::sync::mpsc;
 mod chat;
 mod completions;
 mod models;
-mod reasoning;
-mod template;
 mod tools;
 
-pub(super) use template::ChatFormatter;
+pub(super) use sglang_renderer::preprocessing::template::ChatFormatter;
+use sglang_renderer::preprocessing::template::load_chat_formatter;
 
 use super::app::AppState;
 use super::frame::OutputAccumulator;
@@ -56,7 +55,7 @@ pub(super) fn load_chat_support(server_args: &ServerArgs) -> Option<ChatFormatte
         "tokenizer_config.json",
     );
 
-    match template::load_chat_formatter(
+    match load_chat_formatter(
         config_file.as_deref(),
         (!server_args.model_path.is_empty()).then_some(server_args.model_path.as_str()),
         server_args.chat_template.as_deref(),

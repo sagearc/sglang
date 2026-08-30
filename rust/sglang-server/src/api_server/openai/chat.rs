@@ -28,7 +28,6 @@ use tokio::sync::mpsc;
 
 use super::super::guard::AbortGuard;
 use super::completions::completion_usage;
-use super::reasoning::{ReasoningStreamSplitter, split_reasoning_unary};
 use super::tools::{
     apply_tool_constraint, chat_delta, chat_finish_reason, dynamo_parser_name, dynamo_tool_choice,
     parse_chat_tool_calls,
@@ -43,6 +42,7 @@ use crate::message::request::GenerateRequest;
 use crate::message::response::{ChunkExtras, ResponseItem};
 use crate::message::sampling::SamplingParams;
 use crate::message::types::OneOrMany;
+use sglang_renderer::response::{ReasoningStreamSplitter, split_reasoning_unary};
 
 pub(super) fn routes() -> Router<Arc<AppState>> {
     Router::new().route("/v1/chat/completions", post(chat_completions))
@@ -320,10 +320,7 @@ fn merge_template_stops(request: &mut CreateChatCompletionRequest, formatter: &C
     let Some(template_stops) = formatter.stop_strs() else {
         return;
     };
-    let mut stops = match template_stops {
-        OneOrMany::One(one) => vec![one],
-        OneOrMany::Many(many) => many,
-    };
+    let mut stops = template_stops;
     if let Some(request_stop) = &request.stop {
         let Some(request_stops) = request_stop.strings() else {
             return;
@@ -919,16 +916,10 @@ mod tests {
     /// the request's own stops.
     #[test]
     fn template_stops_merge_before_request_stops() {
-        let chatml = super::super::template::builtin_template("chatml").unwrap();
-        let formatter = super::super::ChatFormatter::Legacy(Box::new(
-            super::super::template::LegacyFormatter { spec: chatml },
-        ));
+        let formatter = super::super::load_chat_formatter(None, None, Some("chatml")).unwrap();
         assert_eq!(
             formatter.stop_strs(),
-            Some(crate::message::types::OneOrMany::Many(vec![
-                "<|endoftext|>".into(),
-                "<|im_end|>".into()
-            ]))
+            Some(vec!["<|endoftext|>".into(), "<|im_end|>".into()])
         );
         // No request stop → the template's delimiters alone.
         let mut req = request();
@@ -975,19 +966,14 @@ mod tests {
     /// The HuggingFace renderer carries no template stops (Python's jinja path
     /// keeps only the request's stops), so the request is left unchanged.
     #[test]
-    fn huggingface_formatter_leaves_request_stops_alone() {
+    fn formatter_without_template_stops_leaves_request_stops_alone() {
         let mut req = request();
         req.stop = Some(Stop::String("x".into()));
-        // A prompt formatter is not constructible here without a tokenizer; the
-        // empty-legacy-spec twin proves the merge is formatter-gated, and the
-        // `HuggingFace` arm returns `None` by construction (see `stop_strs`).
-        let legacy = super::super::ChatFormatter::Legacy(Box::new(
-            super::super::template::LegacyFormatter {
-                spec: super::super::template::LegacySpec::default(),
-            },
-        ));
-        assert!(legacy.stop_strs().is_none());
-        merge_template_stops(&mut req, &legacy);
+        // This built-in has no template stops. The HuggingFace arm likewise
+        // returns `None` by construction (see `stop_strs`).
+        let formatter = super::super::load_chat_formatter(None, None, Some("vicuna_v1.1")).unwrap();
+        assert!(formatter.stop_strs().is_none());
+        merge_template_stops(&mut req, &formatter);
         assert_eq!(req.stop, Some(Stop::String("x".into())));
     }
 

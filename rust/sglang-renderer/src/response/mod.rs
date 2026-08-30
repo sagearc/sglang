@@ -24,7 +24,7 @@ use dynamo_parsers::reasoning::{
 /// dynamo does not know (hunyuan, inkling, apertus2509, mimo, poolside_v1,
 /// cohere_command4 — all tokenizer-driven parsers) fall through to the
 /// registry, which warns and falls back to the non-forced Basic parser.
-pub(super) fn build_reasoning_parser(server_name: &str) -> ReasoningParserWrapper {
+pub fn build_reasoning_parser(server_name: &str) -> ReasoningParserWrapper {
     let name = match server_name {
         // Python DetectorMap spellings that differ from the dynamo registry keys.
         "deepseek-r1" | "step3p5" => "deepseek_r1",
@@ -43,7 +43,7 @@ pub(super) fn build_reasoning_parser(server_name: &str) -> ReasoningParserWrappe
 /// Split a completed generation's text into `(reasoning_text, normal_text)`
 /// when `--reasoning-parser` selects a parser; otherwise the text passes
 /// through untouched as normal text. Chat splits before tool-call parsing.
-pub(super) fn split_reasoning_unary(
+pub fn split_reasoning_unary(
     name: Option<&str>,
     text: &str,
     token_ids: &[i32],
@@ -69,13 +69,13 @@ pub(super) fn split_reasoning_unary(
 /// opener or a tool marker establishes the mode, and releases it as normal
 /// text at EOF).
 #[derive(Default)]
-pub(super) struct ReasoningStreamSplitter {
+pub struct ReasoningStreamSplitter {
     name: Option<String>,
     parser: Option<ReasoningParserWrapper>,
 }
 
 impl ReasoningStreamSplitter {
-    pub(super) fn new(name: Option<&str>) -> Self {
+    pub fn new(name: Option<&str>) -> Self {
         Self {
             name: name.map(str::to_owned),
             parser: None,
@@ -83,7 +83,7 @@ impl ReasoningStreamSplitter {
     }
 
     /// Split one frame's text into `(reasoning_text, normal_text)` deltas.
-    pub(super) fn split(&mut self, text: &str, token_ids: &[i32]) -> (String, String) {
+    pub fn split(&mut self, text: &str, token_ids: &[i32]) -> (String, String) {
         let Some(name) = self.name.as_deref() else {
             return (String::new(), text.to_owned());
         };
@@ -99,7 +99,7 @@ impl ReasoningStreamSplitter {
     }
 
     /// Flush the parser-buffered tail at stream end, releasing both columns.
-    pub(super) fn finish(&mut self) -> (String, String) {
+    pub fn finish(&mut self) -> (String, String) {
         let Some(parser) = self.parser.as_mut() else {
             return (String::new(), String::new());
         };

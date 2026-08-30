@@ -18,8 +18,6 @@ use dynamo_renderer::{ChatTemplate, ContextMixins, PromptContextMixin, PromptFor
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::message::types::OneOrMany;
-
 const SUPPORTED_STYLES: &[&str] = &[
     "ADD_COLON_SINGLE",
     "ADD_COLON_TWO",
@@ -50,6 +48,12 @@ const SUPPORTED_STYLES: &[&str] = &[
     "UNLIMITED_OCR",
 ];
 
+#[derive(Debug, Clone, PartialEq)]
+enum StopStrings {
+    One(String),
+    Many(Vec<String>),
+}
+
 /// A chat prompt formatter: either the model's HuggingFace Jinja template or a
 /// legacy SGLang conversation template.
 #[derive(Clone)]
@@ -60,10 +64,7 @@ pub enum ChatFormatter {
 
 impl ChatFormatter {
     /// Render the request's messages to a single prompt string.
-    pub(super) fn render(
-        &self,
-        request: &CreateChatCompletionRequest,
-    ) -> Result<String, TemplateError> {
+    pub fn render(&self, request: &CreateChatCompletionRequest) -> Result<String, TemplateError> {
         match self {
             ChatFormatter::HuggingFace(formatter) => {
                 let PromptFormatter::OAI(formatter) = formatter;
@@ -77,37 +78,43 @@ impl ChatFormatter {
         }
     }
 
-    /// The template's stop strings — Python `Conversation.stop_str`
-    /// (`str | list[str] | None`). Legacy/builtin templates define them (e.g.
-    /// chatml's `<|im_end|>`); the HuggingFace renderer carries none, matching
-    /// Python's jinja path, which keeps only the request's own stops.
-    pub(super) fn stop_strs(&self) -> Option<OneOrMany<String>> {
+    /// The template's stop strings, normalized to a list from Python's
+    /// `Conversation.stop_str` (`str | list[str] | None`). Legacy/builtin
+    /// templates define them (e.g. chatml's `<|im_end|>`); the HuggingFace
+    /// renderer carries none, matching Python's jinja path, which keeps only
+    /// the request's own stops.
+    pub fn stop_strs(&self) -> Option<Vec<String>> {
         match self {
             ChatFormatter::HuggingFace(_) => None,
-            ChatFormatter::Legacy(formatter) => formatter.spec.stop_str.clone(),
+            ChatFormatter::Legacy(formatter) => {
+                formatter.spec.stop_str.as_ref().map(|stops| match stops {
+                    StopStrings::One(stop) => vec![stop.clone()],
+                    StopStrings::Many(stops) => stops.clone(),
+                })
+            }
         }
     }
 }
 
 /// A legacy conversation template, mirroring Python's `Conversation` fields.
 #[derive(Debug, Clone)]
-pub(super) struct LegacySpec {
+struct LegacySpec {
     /// Python `Conversation.name` — drives the CHATGLM round-offset quirk.
-    pub(super) name: String,
-    pub(super) system_template: String,
-    pub(super) system_message: String,
+    name: String,
+    system_template: String,
+    system_message: String,
     /// `(user_role, assistant_role)` — Python `Conversation.roles`.
-    pub(super) roles: (String, String),
-    pub(super) style: String,
-    pub(super) sep: String,
+    roles: (String, String),
+    style: String,
+    sep: String,
     /// `None` = Python's `Conversation.sep2` default. Styles that alternate
     /// seps (`seps[i % 2]`) need it set; Python crashes on `None` there and we
     /// error deliberately.
-    pub(super) sep2: Option<String>,
+    sep2: Option<String>,
     /// Python `Conversation.stop_str` (`str | list[str] | None`).
-    pub(super) stop_str: Option<OneOrMany<String>>,
-    pub(super) image_token: String,
-    pub(super) audio_token: String,
+    stop_str: Option<StopStrings>,
+    image_token: String,
+    audio_token: String,
 }
 
 impl Default for LegacySpec {
@@ -132,14 +139,11 @@ impl Default for LegacySpec {
 /// order, always append the assistant opening, then render per `sep_style`.
 #[derive(Clone)]
 pub struct LegacyFormatter {
-    pub(super) spec: LegacySpec,
+    spec: LegacySpec,
 }
 
 impl LegacyFormatter {
-    pub(super) fn render(
-        &self,
-        request: &CreateChatCompletionRequest,
-    ) -> Result<String, TemplateError> {
+    fn render(&self, request: &CreateChatCompletionRequest) -> Result<String, TemplateError> {
         let mut system_message = self.spec.system_message.clone();
         let mut messages: Vec<(String, String)> = Vec::new();
         for message in &request.messages {
@@ -272,7 +276,7 @@ impl LegacyFormatter {
                     }
                 }
                 match &spec.stop_str {
-                    Some(OneOrMany::One(stop)) => ret.push_str(stop),
+                    Some(StopStrings::One(stop)) => ret.push_str(stop),
                     // Python `ret += self.stop_str` raises TypeError for
                     // `None` / list; error deliberately instead.
                     _ => {
@@ -683,7 +687,7 @@ fn extract_assistant_text(
 }
 
 #[derive(Debug, Error)]
-pub(super) enum TemplateError {
+pub enum TemplateError {
     #[error("failed to read {kind} `{path}`: {source}")]
     Read {
         kind: &'static str,
@@ -752,7 +756,7 @@ pub(super) enum TemplateError {
     UnsupportedRole { role: &'static str },
 }
 
-pub(super) fn load_chat_formatter(
+pub fn load_chat_formatter(
     config_file: Option<&str>,
     model_path: Option<&str>,
     chat_template_arg: Option<&str>,
@@ -1010,7 +1014,7 @@ fn parse_legacy_template(value: &Value, path: &Path) -> Result<LegacySpec, Templ
     // required (`template["stop_str"]` raises KeyError when missing), but an
     // explicit `null` value means `None`.
     let stop_str = match object.get("stop_str") {
-        Some(Value::String(value)) => Some(OneOrMany::One(value.clone())),
+        Some(Value::String(value)) => Some(StopStrings::One(value.clone())),
         Some(Value::Array(values)) => {
             let strings = values
                 .iter()
@@ -1020,7 +1024,7 @@ fn parse_legacy_template(value: &Value, path: &Path) -> Result<LegacySpec, Templ
                     path: path.to_path_buf(),
                     field: "stop_str".to_string(),
                 })?;
-            Some(OneOrMany::Many(
+            Some(StopStrings::Many(
                 strings.into_iter().map(str::to_owned).collect(),
             ))
         }
@@ -1061,7 +1065,7 @@ fn parse_legacy_template(value: &Value, path: &Path) -> Result<LegacySpec, Templ
     })
 }
 
-pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
+fn builtin_template(name: &str) -> Option<LegacySpec> {
     let spec = match name {
         "llama-2" => LegacySpec {
             name: name.into(),
@@ -1070,7 +1074,7 @@ pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
             style: "LLAMA2".into(),
             sep: " ".into(),
             sep2: Some(" </s><s>".into()),
-            stop_str: Some(OneOrMany::Many(vec![
+            stop_str: Some(StopStrings::Many(vec![
                 "[INST]".into(),
                 "[/INST]".into(),
                 "<<SYS>>".into(),
@@ -1085,7 +1089,7 @@ pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
             style: "LLAMA2".into(),
             sep: " ".into(),
             sep2: Some(" </s><s>".into()),
-            stop_str: Some(OneOrMany::Many(vec![
+            stop_str: Some(StopStrings::Many(vec![
                 "[INST]".into(),
                 "[/INST]".into(),
                 "[SYSTEM_PROMPT]".into(),
@@ -1099,7 +1103,7 @@ pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
                 .into(),
             roles: ("user".into(), "assistant".into()),
             style: "LLAMA4".into(),
-            stop_str: Some(OneOrMany::Many(vec![
+            stop_str: Some(StopStrings::Many(vec![
                 "<|end_of_text|>".into(),
                 "<|eot|>".into(),
                 "<|eom|>".into(),
@@ -1112,7 +1116,7 @@ pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
             roles: ("<|user|>".into(), "<|assistant|>".into()),
             style: "NO_COLON_SINGLE".into(),
             sep: "<|end|>".into(),
-            stop_str: Some(OneOrMany::One("<|end|>".into())),
+            stop_str: Some(StopStrings::One("<|end|>".into())),
             image_token: "<|endoftext10|>".into(),
             audio_token: "<|endoftext11|>".into(),
             ..Default::default()
@@ -1124,7 +1128,7 @@ pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
             roles: ("<|im_start|>user".into(), "<|im_start|>assistant".into()),
             style: "CHATML".into(),
             sep: "<|im_end|>".into(),
-            stop_str: Some(OneOrMany::Many(vec![
+            stop_str: Some(StopStrings::Many(vec![
                 "<|endoftext|>".into(),
                 "<|im_end|>".into(),
             ])),
@@ -1147,7 +1151,7 @@ pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
             system_message: "You are a helpful language and vision assistant. You are able to understand the visual content that the user provides, and assist the user with a variety of tasks using natural language.".into(),
             roles: ("user".into(), "assistant".into()),
             style: "LLAMA3".into(),
-            stop_str: Some(OneOrMany::Many(vec![
+            stop_str: Some(StopStrings::Many(vec![
                 "<|end_of_text|>".into(),
                 "<|eot_id|>".into(),
             ])),
@@ -1159,7 +1163,7 @@ pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
             roles: ("<|im_start|>user".into(), "<|im_start|>assistant".into()),
             style: "ADD_COLON_SINGLE".into(),
             sep: "\n".into(),
-            stop_str: Some(OneOrMany::Many(vec![
+            stop_str: Some(StopStrings::Many(vec![
                 "<|im_end|>".into(),
                 "<|action_end|>".into(),
             ])),
@@ -1172,7 +1176,7 @@ pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
             roles: ("<|im_start|>user\n".into(), "<|im_start|>assistant\n".into()),
             style: "MPT".into(),
             sep: "<|im_end|>\n".into(),
-            stop_str: Some(OneOrMany::Many(vec![
+            stop_str: Some(StopStrings::Many(vec![
                 "<|im_end|>".into(),
                 "<|action_end|>".into(),
             ])),
@@ -1185,13 +1189,13 @@ pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
             roles: ("<|im_start|>user".into(), "<|im_start|>assistant".into()),
             style: "ADD_NEW_LINE_SINGLE".into(),
             sep: "<|im_end|>\n".into(),
-            stop_str: Some(OneOrMany::Many(vec!["<|im_end|>".into()])),
+            stop_str: Some(StopStrings::Many(vec!["<|im_end|>".into()])),
             ..Default::default()
         },
         "deepseek-ocr" => LegacySpec {
             name: name.into(),
             style: "NO_COLON_SINGLE".into(),
-            stop_str: Some(OneOrMany::Many(vec!["<｜end▁of▁sentence｜>".into()])),
+            stop_str: Some(StopStrings::Many(vec!["<｜end▁of▁sentence｜>".into()])),
             ..Default::default()
         },
         "unlimited-ocr" => LegacySpec {
@@ -1207,7 +1211,7 @@ pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
             roles: ("User".into(), "Assistant".into()),
             style: "PADDLE_OCR".into(),
             sep: "<|end_of_sentence|>".into(),
-            stop_str: Some(OneOrMany::Many(vec!["<|end_of_sentence|>".into()])),
+            stop_str: Some(StopStrings::Many(vec!["<|end_of_sentence|>".into()])),
             image_token: "<|IMAGE_START|><|IMAGE_PLACEHOLDER|><|IMAGE_END|>".into(),
             ..Default::default()
         },
@@ -1218,7 +1222,7 @@ pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
             style: "DeepSeekVL2".into(),
             sep: "\n\n".into(),
             sep2: Some("<｜end▁of▁sentence｜>".into()),
-            stop_str: Some(OneOrMany::Many(vec![
+            stop_str: Some(StopStrings::Many(vec![
                 "User:".into(),
                 "<｜end▁of▁sentence｜>".into(),
             ])),
@@ -1231,7 +1235,7 @@ pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
             roles: ("<start_of_turn>user\n".into(), "<start_of_turn>model\n".into()),
             style: "GEMMA3".into(),
             sep: "<end_of_turn>\n".into(),
-            stop_str: Some(OneOrMany::Many(vec!["<end_of_turn>".into()])),
+            stop_str: Some(StopStrings::Many(vec!["<end_of_turn>".into()])),
             image_token: "<start_of_image>".into(),
             audio_token: "<start_of_audio>".into(),
             ..Default::default()
@@ -1243,7 +1247,7 @@ pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
             roles: ("<|im_start|>user".into(), "<|im_start|>assistant".into()),
             style: "QWEN2_VL_EMBED".into(),
             sep: "<|im_end|>\n".into(),
-            stop_str: Some(OneOrMany::One("<|endoftext|>".into())),
+            stop_str: Some(StopStrings::One("<|endoftext|>".into())),
             ..Default::default()
         },
         "minicpmv" => LegacySpec {
@@ -1253,7 +1257,7 @@ pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
             roles: ("<|im_start|>user".into(), "<|im_start|>assistant".into()),
             style: "ADD_NEW_LINE_SINGLE".into(),
             sep: "<|im_end|>\n".into(),
-            stop_str: Some(OneOrMany::Many(vec![
+            stop_str: Some(StopStrings::Many(vec![
                 "<|im_end|>".into(),
                 "<|endoftext|>".into(),
             ])),
@@ -1267,7 +1271,7 @@ pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
             style: "ADD_COLON_TWO".into(),
             sep: "\n\n".into(),
             sep2: Some("<｜end▁of▁sentence｜>".into()),
-            stop_str: Some(OneOrMany::Many(vec![
+            stop_str: Some(StopStrings::Many(vec![
                 "<|User|>".into(),
                 "<｜end▁of▁sentence｜>".into(),
             ])),
@@ -1281,7 +1285,7 @@ pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
             roles: ("<|im_start|>user".into(), "<|im_start|>assistant".into()),
             style: "ADD_NEW_LINE_SINGLE".into(),
             sep: "<|im_end|>\n".into(),
-            stop_str: Some(OneOrMany::Many(vec![
+            stop_str: Some(StopStrings::Many(vec![
                 "<|im_end|>".into(),
                 "<|endoftext|>".into(),
             ])),
@@ -1297,7 +1301,7 @@ pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
             ),
             style: "NO_COLON_SINGLE".into(),
             sep: "<|im_end|>".into(),
-            stop_str: Some(OneOrMany::One("<|im_end|>".into())),
+            stop_str: Some(StopStrings::One("<|im_end|>".into())),
             ..Default::default()
         },
         "qwen2-audio" => LegacySpec {
@@ -1307,7 +1311,7 @@ pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
             roles: ("<|im_start|>user".into(), "<|im_start|>assistant".into()),
             style: "QWEN2_AUDIO".into(),
             sep: "<|im_end|>\n".into(),
-            stop_str: Some(OneOrMany::Many(vec!["<|im_end|>".into()])),
+            stop_str: Some(StopStrings::Many(vec!["<|im_end|>".into()])),
             audio_token: "Audio {idx}: <|audio_bos|><|AUDIO|><|audio_eos|>\n".into(),
             ..Default::default()
         },
@@ -1317,7 +1321,7 @@ pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
             roles: ("<|im_start|>user".into(), "<|im_start|>assistant".into()),
             style: "ADD_NEW_LINE_SINGLE".into(),
             sep: "<|im_end|>\n".into(),
-            stop_str: Some(OneOrMany::Many(vec!["<|im_end|>".into()])),
+            stop_str: Some(StopStrings::Many(vec!["<|im_end|>".into()])),
             ..Default::default()
         },
         "points-v15-chat" => LegacySpec {
@@ -1325,13 +1329,13 @@ pub(super) fn builtin_template(name: &str) -> Option<LegacySpec> {
             roles: ("<|im_start|>user".into(), "<|im_start|>assistant".into()),
             style: "ADD_NEW_LINE_SINGLE".into(),
             sep: "<|im_end|>\n".into(),
-            stop_str: Some(OneOrMany::Many(vec!["<|im_end|>".into()])),
+            stop_str: Some(StopStrings::Many(vec!["<|im_end|>".into()])),
             ..Default::default()
         },
         "whisper" => LegacySpec {
             name: name.into(),
             style: "NO_COLON_SINGLE".into(),
-            stop_str: Some(OneOrMany::Many(vec!["<|endoftext|>".into()])),
+            stop_str: Some(StopStrings::Many(vec!["<|endoftext|>".into()])),
             audio_token: String::new(),
             ..Default::default()
         },
@@ -1350,7 +1354,7 @@ mod tests {
     };
 
     use super::{
-        ChatFormatter, LegacyFormatter, LegacySpec, OneOrMany, TemplateError, builtin_template,
+        ChatFormatter, LegacyFormatter, LegacySpec, StopStrings, TemplateError, builtin_template,
         infer_legacy_template_from_model_path, load_chat_formatter,
     };
 
@@ -1374,7 +1378,7 @@ mod tests {
             style: style.into(),
             sep: "|sep|".into(),
             sep2: Some("|sep2|".into()),
-            stop_str: Some(OneOrMany::One("<stop>".into())),
+            stop_str: Some(StopStrings::One("<stop>".into())),
             ..Default::default()
         }
     }
@@ -1598,15 +1602,15 @@ mod tests {
         // QWEN2_VL_EMBED requires a single string stop (Python raises TypeError
         // on a list / None) — error deliberately.
         let mut spec = spec("QWEN2_VL_EMBED");
-        spec.stop_str = Some(OneOrMany::Many(vec!["a".into(), "b".into()]));
+        spec.stop_str = Some(StopStrings::Many(vec!["a".into(), "b".into()]));
         let error = LegacyFormatter { spec }.render(&request).unwrap_err();
         assert!(error.to_string().contains("stop_str"));
         // The built-in gme-qwen2-vl registers a single-string stop.
         let spec = builtin_template("gme-qwen2-vl").unwrap();
-        assert!(matches!(spec.stop_str, Some(OneOrMany::One(_))));
+        assert!(matches!(spec.stop_str, Some(StopStrings::One(_))));
         // gemma-it registers a list.
         let spec = builtin_template("gemma-it").unwrap();
-        assert!(matches!(spec.stop_str, Some(OneOrMany::Many(_))));
+        assert!(matches!(spec.stop_str, Some(StopStrings::Many(_))));
         // An explicit `"stop_str": null` in a legacy JSON file maps to `None`
         // (Python accepts a present null), while a missing key stays an error.
         let base = std::env::temp_dir().join(format!(

@@ -1,0 +1,15 @@
+[package]
+name = "sglang-renderer"
+description = "Request preprocessing and response semantics for SGLang"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+dynamo-parsers = "7.0.1"
+dynamo-protocols = "5.1.0"
+dynamo-renderer = "5.0.0"

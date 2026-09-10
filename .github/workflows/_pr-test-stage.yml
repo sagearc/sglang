@@ -125,7 +125,13 @@ jobs:
     runs-on: ${{ fromJson(fromJson(inputs.check_changes).runs_on_map)[inputs.runner_config] }}
     timeout-minutes: ${{ fromJson(inputs.job_timeout_minutes) }}
     strategy:
-      fail-fast: false
+      fail-fast: >-
+        ${{ github.event_name == 'pull_request' && !inputs.scheduled &&
+            !contains(github.event.pull_request.labels.*.name, 'bypass-fastfail') &&
+            !fromJson(inputs.caller_inputs).skip_pr_test_health_check &&
+            !fromJson(inputs.caller_inputs).test_parallel_dispatch &&
+            !fromJson(inputs.caller_inputs).run_all_tests &&
+            !fromJson(inputs.caller_inputs).force_continue_on_error }}
       max-parallel: ${{ (inputs.scheduled && !fromJson(inputs.caller_inputs).full_parallel) && 1 || fromJson(inputs.partitions)[inputs.self_name].max_parallel }}
       matrix:
         partition: ${{ fromJson(inputs.partitions)[inputs.self_name].arr }}

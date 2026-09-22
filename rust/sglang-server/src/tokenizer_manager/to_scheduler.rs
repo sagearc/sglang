@@ -193,7 +193,12 @@ impl Intake {
                         match g
                             .sampling_params
                             .normalize(self.limits.skip_tokenizer_init, self.limits.vocab_size)
-                        {
+                            .map_err(|error| match error {
+                                sglang_renderer::RendererError::Validation(message) => {
+                                    Error::Validation(message)
+                                }
+                                error => Error::Internal(error.to_string()),
+                            }) {
                             Err(e) => Err(e),
                             // The Rust MM pipeline produces the final input_ids,
                             // so it wins even over a pre-tokenized prompt (which

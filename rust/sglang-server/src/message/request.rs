@@ -264,9 +264,10 @@ impl GenerateBody {
                         v.len()
                     )));
                 }
-                v
+                v.into_iter().map(|entry| entry.params).collect()
             }
-            Some(SamplingParamsInput::One(sp)) => {
+            Some(SamplingParamsInput::One(entry)) => {
+                let sp = entry.params;
                 // Broadcasting deep-clones the client's params once per prompt,
                 // heap and all — `stop`, `logit_bias` and `custom_params` (arbitrary
                 // JSON) are still unnormalized client data here. The blow-up is
@@ -283,12 +284,12 @@ impl GenerateBody {
                     // JSON became ~1008 MiB of live heap once parsed into `Value`
                     // nodes, `String`s and map entries. Scale by that measured factor
                     // so the budget bounds memory rather than wire size.
-                    let per_clone = serde_json::to_string(&*sp)
+                    let per_clone = serde_json::to_string(&sp)
                         .map_or(0, |s| s.len())
                         .saturating_mul(JSON_TO_HEAP_FACTOR);
                     check_broadcast_budget(per_clone, n, "sampling_params")?;
                 }
-                vec![*sp; n]
+                vec![sp; n]
             }
         };
 
@@ -865,14 +866,67 @@ mod tests {
         value: i64,
     }
 
-    /// Vocab size for tests that aren't about the vocab bound (see
-    /// `sampling::tests::TEST_VOCAB`).
+    /// Vocab size for tests that aren't about the vocab bound.
     const TEST_VOCAB: u64 = 1000;
 
     fn requests(body: &str) -> Result<(Vec<GenerateRequest>, bool), Error> {
         serde_json::from_str::<GenerateBody>(body)
             .unwrap()
             .into_requests()
+    }
+
+    #[test]
+    fn renderer_sampling_survives_generate_http_boundary() {
+        let mut sampling: SamplingParams = serde_json::from_value(serde_json::json!({
+            "max_new_tokens": null,
+            "temperature": 0.0,
+            "stop": ["END", "STOP"],
+            "stop_regex": "\\d{3}",
+            "stop_token_ids": [42],
+            "custom_params": {"tenant": "a", "options": [1, true, null]}
+        }))
+        .unwrap();
+        sampling.normalize(false, TEST_VOCAB).unwrap();
+
+        let rendered =
+            sglang_renderer::GenerateRequest::from(sglang_renderer::TokenIdsRequest::new(
+                "rendered",
+                vec![7, 8],
+                sglang_renderer::GenerationOptions {
+                    sampling_params: sampling.clone(),
+                    ..Default::default()
+                },
+            ));
+        let body = serde_json::to_value(rendered).unwrap();
+        assert_eq!(
+            body["sampling_params"]["stop"],
+            serde_json::json!(["END", "STOP"])
+        );
+        assert_eq!(
+            body["sampling_params"]["stop_regex"],
+            serde_json::json!(["\\d{3}"])
+        );
+        for field in [
+            "is_normalized",
+            "stop_strs",
+            "stop_str_max_len",
+            "ebnf_full_assistant",
+        ] {
+            assert!(body["sampling_params"].get(field).is_none(), "{field}");
+        }
+
+        let (mut requests, is_batch) = serde_json::from_value::<GenerateBody>(body)
+            .unwrap()
+            .into_requests()
+            .unwrap();
+        assert!(!is_batch);
+        assert_eq!(requests.len(), 1);
+        let request = requests.pop().unwrap();
+        assert_eq!(request.input_ids, Some(vec![7, 8]));
+        let mut received = request.sampling_params;
+        assert!(!received.is_normalized);
+        received.normalize(false, TEST_VOCAB).unwrap();
+        assert_eq!(received, sampling);
     }
 
     /// Scalar `text` → one item, not a batch (response stays a single object).

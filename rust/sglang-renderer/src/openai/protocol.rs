@@ -319,7 +319,7 @@ impl RequestExtensions {
     }
 }
 
-fn expand_per_prompt<T: Clone>(
+fn expand_per_prompt<T: crate::OneOrManyItem + Clone>(
     name: &str,
     value: Option<OneOrMany<T>>,
     prompt_count: usize,

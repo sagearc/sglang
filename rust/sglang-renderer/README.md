@@ -1,5 +1,10 @@
 # SGLang renderer
 
+The library owns the shared sampling types, normalization, and validation. The
+Rust server embeds it without the `http` feature, so no separate renderer process
+is required for direct serving. Hosts can supply a tokenizer through
+`TextTokenizer` and `RendererService::with_tokenizer`.
+
 The renderer runs as a separate service. It owns text preprocessing, token decoding,
 and OpenAI chat/completion responses. It submits token IDs through the native
 Rust server's existing `/generate` endpoint.

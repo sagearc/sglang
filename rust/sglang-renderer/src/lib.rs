@@ -37,12 +37,11 @@ pub use postprocessing::{
     ChatEvent, ChatFinishReason, ChatResponseProcessor, ChatToolCallDelta, DecodedChatEvent,
 };
 pub(crate) use preprocessing::ChatFormatter;
-pub use preprocessing::RegexPattern;
 pub(crate) use preprocessing::SamplingParamsOverrides;
 pub(crate) use preprocessing::{ChatPreprocessor, LoweredChat};
 pub use preprocessing::{
-    ChatRequest, DynamoTokenizer, PreparedChat, ReasoningEffort, RendererService, SamplingParams,
-    TextTokenizer, load_tokenizer,
+    ChatRequest, CustomParamValue, DynamoTokenizer, JsonScalar, PreparedChat, ReasoningEffort,
+    RendererService, SamplingParams, TextTokenizer, load_tokenizer,
 };
 pub use preprocessing::{
     GenerateRequest, GenerateRequestMetadata, GenerateSamplingParams, GenerationOptions,
@@ -50,4 +49,4 @@ pub use preprocessing::{
 };
 #[cfg(feature = "http")]
 pub use runtime::{RendererRuntimeConfig, serve};
-pub use types::{OneOrMany, TokenIds};
+pub use types::{OneOrMany, OneOrManyItem, TokenIds};

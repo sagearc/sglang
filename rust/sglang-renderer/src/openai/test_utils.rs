@@ -1,10 +1,9 @@
-use crate::{RendererConfig, RendererLimits, SamplingDefaults};
+use crate::{
+    GenerationFinishReason, GenerationOutput, GenerationStream, MatchedStop, RendererConfig,
+    RendererLimits, ResponseError, SamplingDefaults,
+};
 use futures::StreamExt;
 use tokio::sync::mpsc;
-
-use crate::{
-    GenerationFinishReason, GenerationOutput, GenerationStream, MatchedStop, ResponseError,
-};
 
 use super::completions::SubmittedChoice;
 

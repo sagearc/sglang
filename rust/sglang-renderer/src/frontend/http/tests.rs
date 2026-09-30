@@ -21,20 +21,27 @@ mod suite {
     use tokio::sync::Barrier;
     use tower::ServiceExt;
 
-    use crate::engine::test_utils::tiny_tokenizer;
-    use crate::engine::{GenerationService, TokenDecoder};
+    use crate::{
+        RendererService,
+        engine::test_utils::tiny_tokenizer,
+        engine::{GenerationService, TokenDecoder},
+        openai::test_utils::renderer_config,
+    };
 
     use super::super::{
         DEFAULT_REQUEST_BODY_LIMIT_BYTES, HttpGenerateClient, OpenAIService, hosted_routes,
         render_only_routes, standalone_routes,
     };
-    use crate::openai::test_utils::renderer_config;
-    use crate::{RendererError, RendererService, TextTokenizer};
+    use sglang_processor::{ProcessorError, TextTokenizer};
 
     struct WordTokenizer;
 
     impl TextTokenizer for WordTokenizer {
-        fn encode(&self, text: &str, _add_special_tokens: bool) -> Result<Vec<i32>, RendererError> {
+        fn encode(
+            &self,
+            text: &str,
+            _add_special_tokens: bool,
+        ) -> Result<Vec<i32>, ProcessorError> {
             Ok(text.split_whitespace().map(|_| 7).collect())
         }
     }

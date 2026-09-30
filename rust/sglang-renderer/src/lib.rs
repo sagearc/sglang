@@ -1,7 +1,9 @@
 //! Reusable request preprocessing for SGLang.
 //!
-//! The core renders normalized chat requests, lowers textual completions,
-//! tokenizes prompts, and produces the token-in contract consumed by SGLang.
+//! The core lowers chat and text completions to the token-in contract consumed
+//! by SGLang. Chat templates, tokenization, and output parsing come from
+//! `sglang-processor`.
+//!
 //! OpenAI operations and generation decoding are independent of transport.
 //! HTTP adapters, the SGLang HTTP engine client, and the process runtime serve
 //! them. Protocol adapters own middleware and framing; shared services own
@@ -13,7 +15,6 @@ mod error;
 mod frontend;
 mod launcher;
 mod openai;
-mod postprocessing;
 mod preprocessing;
 mod runtime;
 mod types;
@@ -27,18 +28,10 @@ pub use error::{
     RendererError, RendererErrorKind, ResponseError, ResponseErrorKind, UpstreamErrorCode,
 };
 pub use launcher::run_cli;
-pub use postprocessing::{
-    ChatEvent, ChatFinishReason, ChatResponseProcessor, ChatToolCallDelta, DecodedChatEvent,
-};
-pub(crate) use preprocessing::ChatFormatter;
-pub(crate) use preprocessing::{ChatPreprocessor, LoweredChat};
 pub use preprocessing::{
-    ChatRequest, DynamoTokenizer, PreparedChat, ReasoningEffort, RendererService, SamplingParams,
-    TextTokenizer, load_tokenizer,
+    ChatGenerateRequest, GenerateRequest, GenerateRequestMetadata, GenerateSamplingParams,
+    GenerationOptions, PreparedChat, RendererService, SamplingParams, TextRequest, TokenIdsRequest,
 };
-pub use preprocessing::{
-    GenerateRequest, GenerateRequestMetadata, GenerateSamplingParams, GenerationOptions,
-    TextRequest, TokenIdsRequest,
-};
+pub(crate) use preprocessing::{GenerateRequestIdentity, TextRequestGroup};
 pub use runtime::{RendererRuntimeConfig, serve};
 pub use types::{OneOrMany, TokenIds};

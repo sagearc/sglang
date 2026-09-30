@@ -16,6 +16,12 @@ OpenAI-to-token-IDs frontend today, such as llm-d. When sgl-router serves
 OpenAI requests as preprocessed `GenerateRequest`s, this crate will be
 removed; new API work belongs in sgl-router, not here.
 
+Chat templates, tokenization, and output parsing come from the
+[`sglang-processor`](../sglang-processor) library, which sgl-router and the
+Rust server share. This crate adds the OpenAI routes, request preparation and
+validation, generation decoding, the HTTP engine client, and the process
+runtime.
+
 ## Build and run
 
 From the repository root, build the standalone renderer. Rendering and

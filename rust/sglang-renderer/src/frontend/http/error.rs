@@ -5,7 +5,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use crate::ResponseError;
+use crate::{ResponseError, ResponseErrorKind, UpstreamErrorCode};
 
 fn openai_error(code: StatusCode, message: impl Into<String>) -> Response {
     (code, Json(error_payload(code, message))).into_response()
@@ -26,7 +26,6 @@ pub(super) fn response_error(error: ResponseError) -> Response {
 }
 
 pub(super) fn response_status(error: &ResponseError) -> StatusCode {
-    use crate::{ResponseErrorKind, UpstreamErrorCode};
     match error.kind {
         ResponseErrorKind::InvalidRequest => StatusCode::BAD_REQUEST,
         ResponseErrorKind::Unavailable => StatusCode::SERVICE_UNAVAILABLE,

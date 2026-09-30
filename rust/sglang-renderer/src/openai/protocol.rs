@@ -2,19 +2,20 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use dynamo_protocols::types::{
+use serde::Deserialize;
+use serde_json::Value;
+use sglang_processor::dynamo_protocols::types::{
     ChatCompletionAudio, ChatCompletionFunctionCall, ChatCompletionFunctions,
     ChatCompletionRequestMessage, ChatCompletionStreamOptions, ChatCompletionTool,
     ChatCompletionToolChoiceOption, PredictionContent, Prompt, ResponseFormat, ServiceTier, Stop,
     WebSearchOptions,
 };
-use serde::Deserialize;
-use serde_json::Value;
+use sglang_processor::{ChatRequest, ReasoningEffort, dynamo_renderer};
 
-use crate::preprocessing::{GenerateRequestIdentity, TextRequestGroup};
 use crate::{
-    ChatRequest, GenerateRequestMetadata, GenerationOptions, OneOrMany, ReasoningEffort,
-    RendererConfig, RendererError, SamplingDefaults, SamplingParams, TokenIds, TokenIdsRequest,
+    ChatGenerateRequest, GenerateRequestIdentity, GenerateRequestMetadata, GenerationOptions,
+    OneOrMany, RendererConfig, RendererError, SamplingDefaults, SamplingParams, TextRequestGroup,
+    TokenIds, TokenIdsRequest,
 };
 
 const MAX_OPENAI_CHOICES: usize = 4096;
@@ -415,7 +416,7 @@ fn generated_response_id(prefix: &str) -> String {
 pub(crate) fn lower_chat_request(
     config: &RendererConfig,
     mut request: ChatCompletionRequest,
-) -> Result<(String, ChatRequest), RendererError> {
+) -> Result<(String, ChatGenerateRequest), RendererError> {
     normalize_reasoning_inputs(
         &mut request.reasoning_effort,
         request.reasoning.take(),
@@ -438,22 +439,24 @@ pub(crate) fn lower_chat_request(
     request.sampling_overrides.apply(&mut sampling_params);
     Ok((
         response_id.clone(),
-        ChatRequest {
+        ChatGenerateRequest {
             rid: response_id,
-            model: request.model,
-            messages: request.messages,
-            tools: request.tools,
-            tool_choice: request.tool_choice,
-            response_format: request.response_format,
-            reasoning_effort: request.reasoning_effort,
-            continue_final_message: request.continue_final_message,
-            chat_template_args: request.chat_template_kwargs,
+            chat: ChatRequest {
+                model: request.model,
+                messages: request.messages,
+                tools: request.tools,
+                tool_choice: request.tool_choice,
+                response_format: request.response_format,
+                reasoning_effort: request.reasoning_effort,
+                continue_final_message: request.continue_final_message,
+                chat_template_args: request.chat_template_kwargs,
+                parallel_tool_calls: request.parallel_tool_calls.unwrap_or(true),
+            },
             sampling_params,
             choice_count: request.n.unwrap_or(1) as usize,
             stream: request.stream.unwrap_or(false),
             return_logprob: request.logprobs.unwrap_or(false),
             top_logprobs_num: request.top_logprobs.unwrap_or(0) as i64,
-            parallel_tool_calls: request.parallel_tool_calls.unwrap_or(true),
             metadata,
         },
     ))

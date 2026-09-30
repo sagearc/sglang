@@ -90,12 +90,17 @@ mod tests {
     };
     use tower::ServiceExt;
 
-    use crate::{RendererConfig, RendererError, RendererLimits, SamplingDefaults, TextTokenizer};
+    use crate::{RendererConfig, RendererLimits, SamplingDefaults};
+    use sglang_processor::{ProcessorError, TextTokenizer};
 
     struct WordTokenizer;
 
     impl TextTokenizer for WordTokenizer {
-        fn encode(&self, text: &str, _add_special_tokens: bool) -> Result<Vec<i32>, RendererError> {
+        fn encode(
+            &self,
+            text: &str,
+            _add_special_tokens: bool,
+        ) -> Result<Vec<i32>, ProcessorError> {
             Ok(text.split_whitespace().map(|_| 7).collect())
         }
     }

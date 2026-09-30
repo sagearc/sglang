@@ -1,6 +1,8 @@
 //! Generation stream merging and aggregation.
 
-use crate::{GenerationOutput, GenerationStream, ResponseError};
+use crate::{
+    GenerationOutput, GenerationOutputExtras, GenerationStream, ResponseError, ResponseErrorKind,
+};
 use futures::{StreamExt, stream::BoxStream};
 
 pub(crate) fn merge_indexed(
@@ -26,7 +28,7 @@ pub(crate) async fn collect_output(
         }
     }
     Err(ResponseError {
-        kind: crate::ResponseErrorKind::Internal,
+        kind: ResponseErrorKind::Internal,
         message: "response truncated before completion".into(),
     })
 }
@@ -44,7 +46,7 @@ fn fold_output(collected: &mut GenerationOutput, output: GenerationOutput) {
     if let Some(output) = output.extras {
         let collected = collected
             .extras
-            .get_or_insert_with(|| Box::new(crate::GenerationOutputExtras::default()));
+            .get_or_insert_with(|| Box::new(GenerationOutputExtras::default()));
         collected.output_logprobs.extend(output.output_logprobs);
         if !output.input_logprobs.is_empty() {
             collected.input_logprobs = output.input_logprobs;

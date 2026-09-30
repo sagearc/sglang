@@ -1,9 +1,10 @@
 use std::sync::{Arc, Mutex};
 
-use dynamo_protocols::types::ChatCompletionRequestMessage;
+use sglang_processor::dynamo_protocols::types::ChatCompletionRequestMessage;
+use sglang_processor::{ChatRequest, ProcessorError, TextTokenizer};
 use sglang_renderer::{
-    ChatRequest, GenerateRequestMetadata, GenerationOptions, RendererConfig, RendererError,
-    RendererLimits, RendererService, SamplingDefaults, SamplingParams, TextRequest, TextTokenizer,
+    ChatGenerateRequest, GenerateRequestMetadata, GenerationOptions, RendererConfig,
+    RendererLimits, RendererService, SamplingDefaults, SamplingParams, TextRequest,
 };
 
 #[derive(Clone, Default)]
@@ -12,7 +13,7 @@ struct RecordingTokenizer {
 }
 
 impl TextTokenizer for RecordingTokenizer {
-    fn encode(&self, text: &str, add_special_tokens: bool) -> Result<Vec<i32>, RendererError> {
+    fn encode(&self, text: &str, add_special_tokens: bool) -> Result<Vec<i32>, ProcessorError> {
         self.prompts
             .lock()
             .unwrap()
@@ -67,16 +68,19 @@ fn completion_and_chat_share_the_public_text_preparation_boundary() {
         {"role": "user", "content": "hello"}
     ]))
     .unwrap();
-    let chat = ChatRequest {
+    let chat = ChatGenerateRequest {
         rid: "chat".into(),
-        model: "model".into(),
-        messages,
-        tools: None,
-        tool_choice: None,
-        response_format: None,
-        reasoning_effort: None,
-        continue_final_message: false,
-        chat_template_args: None,
+        chat: ChatRequest {
+            model: "model".into(),
+            messages,
+            tools: None,
+            tool_choice: None,
+            response_format: None,
+            reasoning_effort: None,
+            continue_final_message: false,
+            chat_template_args: None,
+            parallel_tool_calls: true,
+        },
         sampling_params: SamplingParams {
             max_new_tokens: Some(1),
             ..Default::default()
@@ -85,7 +89,6 @@ fn completion_and_chat_share_the_public_text_preparation_boundary() {
         stream: false,
         return_logprob: false,
         top_logprobs_num: 0,
-        parallel_tool_calls: true,
         metadata: GenerateRequestMetadata::default(),
     };
     futures::executor::block_on(renderer.prepare_chat(chat)).unwrap();

@@ -9,13 +9,20 @@ work with an unmodified Rust server. It accepts both cumulative and incremental
 streaming responses, using the engine's configured format. Additional generate
 request fields or server behavior changes are deferred to separate PRs.
 
+## Status: temporary
+
+This crate is a stopgap for integrations that need a standalone
+OpenAI-to-token-IDs frontend today, such as llm-d. When sgl-router serves
+OpenAI requests as preprocessed `GenerateRequest`s, this crate will be
+removed; new API work belongs in sgl-router, not here.
+
 ## Build and run
 
 From the repository root, build the standalone renderer. Rendering and
 tokenization work without an engine; generation requires a running SGLang engine.
 
 ```sh
-cargo build --manifest-path rust/Cargo.toml -p sglang-renderer --release --features http --locked
+cargo build --manifest-path rust/Cargo.toml -p sglang-renderer --release --locked
 ```
 
 Start the engine in one terminal.

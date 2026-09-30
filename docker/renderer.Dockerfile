@@ -35,7 +35,7 @@ RUN --mount=type=cache,id=renderer-registry-${TARGETARCH},target=/usr/local/carg
     --mount=type=cache,id=renderer-git-${TARGETARCH},target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=renderer-target-${TARGETARCH},target=/build/rust/target,sharing=locked \
     cargo build --manifest-path rust/Cargo.toml -p sglang-renderer \
-        --bin sglang-renderer --release --features http --locked \
+        --bin sglang-renderer --release --locked \
     && install -D rust/target/release/sglang-renderer /out/sglang-renderer
 
 # Run the existing unit suite in the same Linux toolchain used for the image.
@@ -46,7 +46,7 @@ COPY experimental/sgl-router/tests/fixtures/tiny_tokenizer.json experimental/sgl
 RUN --mount=type=cache,id=renderer-registry-${TARGETARCH},target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=renderer-git-${TARGETARCH},target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=renderer-target-${TARGETARCH},target=/build/rust/target,sharing=locked \
-    cargo test --manifest-path rust/Cargo.toml -p sglang-renderer --features http --locked
+    cargo test --manifest-path rust/Cargo.toml -p sglang-renderer --locked
 
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171 AS runtime
 

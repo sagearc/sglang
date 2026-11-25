@@ -339,6 +339,7 @@ impl Worker {
             .any(|s| services.contains(s))
     }
 
+    #[allow(dead_code, reason = "used by fleet routing")]
     pub(crate) fn set_services(&self, services: BTreeSet<String>) {
         *self.services.write().unwrap() = services;
     }

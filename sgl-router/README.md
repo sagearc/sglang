@@ -74,6 +74,10 @@ cd sgl-router
 cargo build --release
 ```
 
+To build for one plain worker, run `cargo build --release -p sgl-router
+--no-default-features` and pass exactly one URL to `--worker-urls`. This build
+serves the same HTTP and native gRPC frontend with fleet routing disabled.
+
 Run in front of two engines with cache-aware routing:
 
 ```bash

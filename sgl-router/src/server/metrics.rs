@@ -403,6 +403,7 @@ impl StaleRequestOutcome {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code, reason = "used by fleet routing")]
 pub(crate) enum PolicySelectionFailureReason {
     PrefillAdmissionExhausted,
     CacheCandidatesExhausted,
@@ -446,6 +447,7 @@ impl InputIdsForwarding {
     }
 }
 
+#[allow(dead_code, reason = "used by fleet routing")]
 impl PolicySelectionFailureReason {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
@@ -849,6 +851,7 @@ impl MetricsRegistry {
         counter.fetch_add(1, Ordering::Relaxed);
     }
 
+    #[allow(dead_code, reason = "used by fleet routing")]
     pub(crate) fn record_policy_selection_failure(
         &self,
         policy: PolicyKind,

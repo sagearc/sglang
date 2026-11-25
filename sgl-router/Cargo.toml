@@ -55,7 +55,7 @@ tower-http = { version = "0.6", features = ["trace", "compression-gzip", "cors",
 reqwest = { version = "0.12", features = ["stream", "json", "rustls-tls", "http2"], default-features = false }
 # Named directly for `Error::is_incomplete_message`, which reqwest does not expose.
 hyper = "1"
-sgl-kv-indexer = { path = "sgl-kv-indexer" }
+sgl-kv-indexer = { optional = true, path = "sgl-kv-indexer" }
 # Native SglangService gRPC types, shared with the engine (proto/sglang/api/v1).
 sglang-api-types = { path = "../rust/sglang-api-types" }
 tonic = { version = "0.14.6", features = ["transport"] }
@@ -83,8 +83,8 @@ flate2 = "1"
 rand = "0.8"
 tokio-stream = { version = "0.1", features = ["net"] }
 dashmap = "6"
-kube = { version = "0.96", features = ["runtime", "derive"] }
-k8s-openapi = { version = "0.23", features = ["v1_31"] }
+kube = { optional = true, version = "0.96", features = ["runtime", "derive"] }
+k8s-openapi = { optional = true, version = "0.23", features = ["v1_31"] }
 tokio-util = "0.7"
 uuid = { version = "1", features = ["v4"] }
 
@@ -101,7 +101,7 @@ rmp-serde = "1"
 rustc-hash = "2"
 sha2 = "0.10"
 url = "2"
-zeromq = { version = "0.6", default-features = false, features = ["tokio-runtime", "tcp-transport"] }
+zeromq = { optional = true, version = "0.6", default-features = false, features = ["tokio-runtime", "tcp-transport"] }
 
 # FIPS 140-3 builds only (`--features fips`): aws-lc-rs's FIPS module becomes the
 # process-wide rustls provider, which reqwest and kube use for every TLS
@@ -110,7 +110,8 @@ aws-lc-rs = { version = "1.18.2", optional = true, features = ["fips"] }
 rustls = { version = "0.23", optional = true, default-features = false, features = ["fips", "std"] }
 
 [features]
-default = []
+default = ["routing"]
+routing = ["dep:kube", "dep:k8s-openapi", "dep:zeromq", "dep:sgl-kv-indexer"]
 fips = ["dep:aws-lc-rs", "dep:rustls"]
 
 [dev-dependencies]
@@ -145,17 +146,21 @@ rand = "0.8"
 [[test]]
 name = "component"
 path = "tests/component/main.rs"
+required-features = ["routing"]
 
 [[test]]
 name = "proxy"
 path = "tests/proxy/main.rs"
+required-features = ["routing"]
 
 [[bench]]
 name = "tree_lookup"
 harness = false
 path = "benches/tree_lookup.rs"
+required-features = ["routing"]
 
 [[bench]]
 name = "policy_select"
 harness = false
 path = "benches/policy_select.rs"
+required-features = ["routing"]

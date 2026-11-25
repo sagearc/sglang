@@ -14,7 +14,7 @@ use crate::server::metrics::{
     RequestOutcome, StaleRequestOutcome, WorkerModeLabel,
 };
 use crate::state::load_monitor::router_inflight_load::RouterInflightLoadGuard;
-use crate::workers::{DecodeSlot, DpRankGuard, LoadGuard, Worker};
+use crate::workers::{DpRankGuard, LoadGuard, Worker};
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Response};
 use axum::response::IntoResponse;
@@ -145,19 +145,6 @@ pub(crate) struct Dispatched<R> {
     pub(crate) retry_excluding: Vec<WorkerId>,
 }
 
-fn release_on_first_byte(
-    slot: Option<DecodeSlot>,
-    first_byte: Box<dyn FnOnce() + Send + 'static>,
-) -> Box<dyn FnOnce() + Send + 'static> {
-    match slot {
-        Some(slot) => Box::new(move || {
-            slot.release();
-            first_byte();
-        }),
-        None => first_byte,
-    }
-}
-
 /// How the selected workers are reached: HTTP clients over HTTP, gRPC clients over gRPC.
 pub(crate) trait Transport: Clone + Send + Sync + 'static {
     type Response: Send + 'static;
@@ -183,7 +170,7 @@ pub(crate) trait Transport: Clone + Send + Sync + 'static {
         metrics: &DispatchMetrics,
         expiration: CancellationToken,
         stream_abort: CancellationToken,
-        decode_slot: Option<DecodeSlot>,
+        on_first_byte: Option<Box<dyn FnOnce() + Send + 'static>>,
     ) -> impl Future<Output = Result<Self::Response, ApiError>> + Send;
 }
 
@@ -227,7 +214,7 @@ impl Transport for Http {
         metrics: &DispatchMetrics,
         expiration: CancellationToken,
         stream_abort: CancellationToken,
-        decode_slot: Option<DecodeSlot>,
+        on_first_byte: Option<Box<dyn FnOnce() + Send + 'static>>,
     ) -> Result<Response<Body>, ApiError> {
         forward_to_response_worker(
             ctx,
@@ -240,7 +227,7 @@ impl Transport for Http {
             metrics,
             expiration,
             stream_abort,
-            decode_slot,
+            on_first_byte,
         )
         .await
     }
@@ -275,16 +262,13 @@ impl Transport for Grpc {
         metrics: &DispatchMetrics,
         expiration: CancellationToken,
         stream_abort: CancellationToken,
-        decode_slot: Option<DecodeSlot>,
+        on_first_byte: Option<Box<dyn FnOnce() + Send + 'static>>,
     ) -> Result<Self::Response, ApiError> {
         let (guards, on_first_byte, on_stream_end): (Box<dyn Send + 'static>, _, _) =
             if metrics.streaming {
                 (
                     Box::new((load_guards, metrics.stream_duration_guard())),
-                    Some(release_on_first_byte(
-                        decode_slot,
-                        metrics.first_byte_callback(),
-                    )),
+                    on_first_byte,
                     Some(metrics.stream_end_callback(worker.url.clone())),
                 )
             } else {
@@ -320,13 +304,12 @@ async fn forward_to_response_worker(
     metrics: &DispatchMetrics,
     expiration: CancellationToken,
     stream_abort: CancellationToken,
-    decode_slot: Option<DecodeSlot>,
+    on_first_byte: Option<Box<dyn FnOnce() + Send + 'static>>,
 ) -> Result<Response<Body>, ApiError> {
     if metrics.streaming {
         // Load and duration guards live until the SSE pump ends, not just until headers arrive.
         let stream_guards: Box<dyn Send + 'static> =
             Box::new((load_guards, metrics.stream_duration_guard()));
-        let first_byte = release_on_first_byte(decode_slot, metrics.first_byte_callback());
         ctx.proxy
             .forward_streaming_to(
                 &worker.url,
@@ -337,7 +320,7 @@ async fn forward_to_response_worker(
                 body,
                 engine_rid,
                 Some(stream_guards),
-                Some(first_byte),
+                on_first_byte,
                 Some(metrics.stream_end_callback(worker.url.clone())),
                 Some(expiration),
                 Some(stream_abort),
@@ -396,7 +379,7 @@ impl DispatchMetrics {
     }
 
     // TTFT uses the first successful stream chunk, measured from request arrival.
-    fn first_byte_callback(&self) -> Box<dyn FnOnce() + Send + 'static> {
+    pub(crate) fn first_byte_callback(&self) -> Box<dyn FnOnce() + Send + 'static> {
         let metrics = Arc::clone(&self.registry);
         let model = self.model.clone();
         let request_started_at = self.request_started_at;

@@ -225,7 +225,9 @@ pub(crate) async fn dispatch<T: PrefillTransport>(
         &metrics,
         expiration_token.clone(),
         stream_abort,
-        decode_slot,
+        metrics
+            .streaming
+            .then(|| release_on_first_byte(decode_slot, metrics.first_byte_callback())),
     );
     // A logprob merge needs prefill's body, so it waits for prefill too.
     let wait_for_prefill = ctx.config.proxy.stream_after_prefill || request.merges_input_logprobs;
@@ -291,6 +293,19 @@ async fn admit_decode(
             }
         }),
         () = prefill_failed.cancelled() => Ok(()),
+    }
+}
+
+fn release_on_first_byte(
+    slot: Option<DecodeSlot>,
+    first_byte: Box<dyn FnOnce() + Send + 'static>,
+) -> Box<dyn FnOnce() + Send + 'static> {
+    match slot {
+        Some(slot) => Box::new(move || {
+            slot.release();
+            first_byte();
+        }),
+        None => first_byte,
     }
 }
 

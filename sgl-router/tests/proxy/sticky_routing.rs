@@ -207,7 +207,9 @@ async fn remaps_to_survivor_when_pinned_worker_is_removed() {
 
     // Remove the pinned worker from the registry; the next same-key request
     // must remap to the survivor (not fail).
-    ctx.registry.remove(&WorkerId(format!("w{pinned_idx}")));
+    ctx.routing
+        .registry
+        .remove(&WorkerId(format!("w{pinned_idx}")));
     let res = app
         .clone()
         .oneshot(chat_request(Some(("x-sgl-routing-key", "alice"))))
@@ -302,7 +304,8 @@ async fn adding_a_worker_does_not_redistribute_existing_key() {
     // (`healthy_workers_for` filters only on the breaker), so the policy
     // *could* route to it — the assertions below prove it does not.
     let w2 = MockWorker::start(vec![]).await;
-    ctx.registry
+    ctx.routing
+        .registry
         .add(WorkerSpec {
             id: WorkerId("w2".into()),
             url: w2.url.clone(),
@@ -315,7 +318,8 @@ async fn adding_a_worker_does_not_redistribute_existing_key() {
     // "policy doesn't pick it" assertions below are meaningful and can't
     // pass vacuously if a future change stops enumerating added workers.
     assert_eq!(
-        ctx.registry
+        ctx.routing
+            .registry
             .healthy_workers_for(&ModelId("tiny".into()))
             .len(),
         3,

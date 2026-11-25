@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::discovery::ModelId;
-use crate::policies::registry::PdPoolResolver;
-use crate::server::app_context::{AppContext, ChatRouting};
+use crate::server::app_context::AppContext;
 use axum::extract::State;
 use axum::http::StatusCode;
 use std::sync::Arc;
@@ -31,18 +30,7 @@ pub async fn readyz(State(ctx): State<Arc<AppContext>>) -> StatusCode {
         return StatusCode::SERVICE_UNAVAILABLE;
     }
     let model = ModelId(ctx.config.model.id.clone());
-    let pool_ready = match &ctx.chat_routing {
-        ChatRouting::Legacy => PdPoolResolver::new(Arc::clone(&ctx.registry))
-            .prefill_candidates(&model)
-            .is_ok_and(|workers| !workers.is_empty()),
-        ChatRouting::Reorg(resolvers) => resolvers.get(&model).is_some_and(|resolver| {
-            resolver
-                .buckets
-                .iter()
-                .any(|bucket| bucket.has_ready_workers(&ctx.registry, &model))
-        }),
-    };
-    if pool_ready && ctx.kv_bootstrap_admit_ready() {
+    if ctx.routing.is_ready(&model) {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
@@ -140,7 +128,8 @@ mod tests {
         ] {
             let ctx = test_ctx(true, false);
             for (i, mode) in modes.into_iter().enumerate() {
-                ctx.registry
+                ctx.routing
+                    .registry
                     .add(WorkerSpec {
                         id: WorkerId(i.to_string()),
                         url: format!("http://worker-{i}:30000"),
@@ -160,7 +149,8 @@ mod tests {
         use crate::discovery::{ModelId, WorkerId, WorkerMode, WorkerSpec};
         let ctx = test_ctx(true, false);
         for mode in [WorkerMode::Prefill, WorkerMode::Decode] {
-            ctx.registry
+            ctx.routing
+                .registry
                 .add(WorkerSpec {
                     id: WorkerId(format!("{mode:?}")),
                     url: format!("http://{mode:?}:30000"),
@@ -192,7 +182,7 @@ mod tests {
         let mut ctx = AppContext::stub();
         ctx.mark_ready();
         add_test_worker(&ctx);
-        ctx.kv_index = KvEventIndex::new_with_bootstrap(
+        ctx.routing.kv_index = KvEventIndex::new_with_bootstrap(
             reqwest::Client::new(),
             BlockSizeOracle::new(),
             tracker,
@@ -231,7 +221,8 @@ mod tests {
 
     fn add_test_worker(ctx: &AppContext) {
         use crate::discovery::{ModelId, WorkerId, WorkerMode, WorkerSpec};
-        ctx.registry
+        ctx.routing
+            .registry
             .add(WorkerSpec {
                 id: WorkerId("test-w".into()),
                 url: "http://test:30000".into(),
@@ -275,7 +266,8 @@ mod tests {
         let ctx = ctx_with_seed_gate(true, false);
         assert_eq!(readyz_status(Arc::clone(&ctx)).await, StatusCode::OK);
 
-        ctx.kv_index
+        ctx.routing
+            .kv_index
             .as_ref()
             .expect("index attached")
             .bootstrap()

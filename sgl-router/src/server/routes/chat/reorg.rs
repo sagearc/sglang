@@ -84,7 +84,10 @@ pub(super) async fn select_workers(
     let mut rejections: Option<Vec<_>> = None;
     let mut missing_stage = None;
     for bucket in buckets {
-        match bucket.pick_engines(&ctx.registry, &bucket_request).await {
+        match bucket
+            .pick_engines(&ctx.routing.registry, &bucket_request)
+            .await
+        {
             Ok(picks) => {
                 record_prefill_route(
                     ctx,

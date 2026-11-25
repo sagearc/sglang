@@ -10,6 +10,7 @@
 //! discovered" failure mode is observable.
 
 use crate::discovery::WorkerMode;
+use crate::routing::RoutingState;
 use crate::server::app_context::AppContext;
 use crate::server::metrics::{escape_label, WorkerSnapshot};
 use crate::state::kv_events::bootstrap::{
@@ -30,6 +31,7 @@ pub async fn metrics(State(ctx): State<Arc<AppContext>>) -> impl IntoResponse {
     // are pull-on-scrape (not pushed) so removed workers stop emitting series
     // immediately; see `MetricsRegistry::render_with_workers`.
     let workers: Vec<WorkerSnapshot> = ctx
+        .routing
         .registry
         .all()
         .into_iter()
@@ -55,39 +57,46 @@ pub async fn metrics(State(ctx): State<Arc<AppContext>>) -> impl IntoResponse {
         .collect();
     let mut body = ctx.metrics.render_with_workers(&workers);
     body.push_str(&ctx.preprocessor.tokenizers().stats().render());
-    // Pull-on-scrape, like the worker gauges above: the tree and the tally
-    // own the numbers, so a worker that goes away stops emitting series
-    // without anything having to reset a pushed counter.
-    // Emitted unconditionally: without it, "no kv series" is indistinguishable
-    // between the intended metadata-only mode, a broken `kv_metrics` wiring,
-    // and a regressed endpoint.
-    body.push_str(
-        "# HELP sgl_router_kv_tree_maintained 1 when this router maintains its own cache-aware KV tree and therefore emits the sgl_router_kv_* series; 0 when placement comes from an external Indexer, where those series would be a structural zero and are omitted rather than reported as an empty tier stream.\n",
-    );
-    body.push_str("# TYPE sgl_router_kv_tree_maintained gauge\n");
-    body.push_str(&format!(
-        "sgl_router_kv_tree_maintained {}\n",
-        u8::from(ctx.kv_metrics.is_some()),
-    ));
-    if let Some(kv) = ctx.kv_metrics.as_ref() {
-        body.push_str(&render_kv_tiers(
-            kv,
-            ctx.block_size_oracle.get().unwrap_or(0),
-        ));
-    }
-    // A local tree alone does not mean peer bootstrap is on; the selector does.
-    if let (Some(index), Some(_)) = (ctx.kv_index.as_ref(), ctx.config.discovery.peer_selector()) {
-        body.push_str(&render_kv_peers(&index.peers()));
-        body.push_str(&render_kv_bootstrap(
-            &index.bootstrap(),
-            index.tree().node_count(),
-        ));
-    }
+    ctx.routing
+        .append_kv_metrics(ctx.config.discovery.peer_selector().is_some(), &mut body);
     (
         StatusCode::OK,
         [(CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)],
         body,
     )
+}
+
+impl RoutingState {
+    fn append_kv_metrics(&self, has_peer_selector: bool, body: &mut String) {
+        // Pull-on-scrape, like the worker gauges above: the tree and the tally
+        // own the numbers, so a worker that goes away stops emitting series
+        // without anything having to reset a pushed counter.
+        // Emitted unconditionally: without it, "no kv series" is indistinguishable
+        // between the intended metadata-only mode, a broken `kv_metrics` wiring,
+        // and a regressed endpoint.
+        body.push_str(
+        "# HELP sgl_router_kv_tree_maintained 1 when this router maintains its own cache-aware KV tree and therefore emits the sgl_router_kv_* series; 0 when placement comes from an external Indexer, where those series would be a structural zero and are omitted rather than reported as an empty tier stream.\n",
+    );
+        body.push_str("# TYPE sgl_router_kv_tree_maintained gauge\n");
+        body.push_str(&format!(
+            "sgl_router_kv_tree_maintained {}\n",
+            u8::from(self.kv_metrics.is_some()),
+        ));
+        if let Some(kv) = self.kv_metrics.as_ref() {
+            body.push_str(&render_kv_tiers(
+                kv,
+                self.block_size_oracle.get().unwrap_or(0),
+            ));
+        }
+        // A local tree alone does not mean peer bootstrap is on; the selector does.
+        if let (Some(index), true) = (self.kv_index.as_ref(), has_peer_selector) {
+            body.push_str(&render_kv_peers(&index.peers()));
+            body.push_str(&render_kv_bootstrap(
+                &index.bootstrap(),
+                index.tree().node_count(),
+            ));
+        }
+    }
 }
 
 /// Render the bootstrap series, which make "this replica is serving
@@ -482,7 +491,7 @@ mod tests {
         index.peers().replace(vec!["http://sibling:30000".into()]);
 
         let mut ctx = AppContext::stub();
-        ctx.kv_index = index.snapshot_source();
+        ctx.routing.kv_index = index.snapshot_source();
         assert!(
             !scrape(Arc::new(ctx))
                 .await
@@ -491,7 +500,7 @@ mod tests {
         );
 
         let mut ctx = AppContext::stub();
-        ctx.kv_index = index.snapshot_source();
+        ctx.routing.kv_index = index.snapshot_source();
         ctx.config.discovery = with_selector();
         let body = scrape(Arc::new(ctx)).await;
         assert!(body.contains("sgl_router_kv_bootstrap_peers 1\n"));
@@ -565,7 +574,7 @@ mod tests {
     }
 
     /// The route wiring itself: `render_kv_tiers` had two direct unit tests
-    /// but nothing exercised `ctx.kv_metrics`, so deleting the `if let` in the
+    /// but nothing exercised `ctx.routing.kv_metrics`, so deleting the `if let` in the
     /// handler left the suite green while `/metrics` silently stopped emitting
     /// all four families.
     #[tokio::test]
@@ -580,7 +589,7 @@ mod tests {
             &[1, 2],
             Tiers::HOST,
         );
-        ctx.kv_metrics = Some(KvIndexMetrics::new(tree, Arc::new(EventTally::new())));
+        ctx.routing.kv_metrics = Some(KvIndexMetrics::new(tree, Arc::new(EventTally::new())));
         let ctx = Arc::new(ctx);
 
         let app = crate::server::app::build_router(ctx.clone());
@@ -611,7 +620,7 @@ mod tests {
     #[tokio::test]
     async fn metrics_endpoint_reports_the_mode_when_no_tree_is_maintained() {
         let ctx = Arc::new(AppContext::stub());
-        assert!(ctx.kv_metrics.is_none());
+        assert!(ctx.routing.kv_metrics.is_none());
         let app = crate::server::app::build_router(ctx.clone());
         let res = app
             .oneshot(
@@ -695,7 +704,8 @@ mod tests {
         use crate::discovery::{ModelId, WorkerId, WorkerMode, WorkerSpec};
 
         let ctx = Arc::new(AppContext::stub());
-        ctx.registry
+        ctx.routing
+            .registry
             .add(WorkerSpec {
                 id: WorkerId("p0".into()),
                 url: "http://p0:30000".into(),

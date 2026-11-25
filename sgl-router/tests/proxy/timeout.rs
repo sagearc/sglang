@@ -203,7 +203,7 @@ async fn streaming_request_times_out_waiting_for_headers() {
             "upstream_timeout"
         );
     }
-    let worker = ctx.registry.get(&WorkerId("w0".into())).unwrap();
+    let worker = ctx.routing.registry.get(&WorkerId("w0".into())).unwrap();
     assert!(
         !worker.breaker.would_allow(),
         "timeouts must open the breaker"

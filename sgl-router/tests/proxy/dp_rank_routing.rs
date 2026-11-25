@@ -92,8 +92,8 @@ fn router_with_load(
     let inflight = RouterInflightLoadRegistry::new(Arc::new(SystemTimeClock), stale);
     let mut ctx =
         AppContext::with_router_inflight_load(cfg, tokenizers, proxy, registry, policies, inflight);
-    ctx.dp_rank_prefix_provider = Some(RadixTreePrefixProvider::new(tree, oracle));
-    ctx.engine_reported_load = load;
+    ctx.routing.dp_rank_prefix_provider = Some(RadixTreePrefixProvider::new(tree, oracle));
+    ctx.routing.engine_reported_load = load;
     build_router(Arc::new(ctx))
 }
 

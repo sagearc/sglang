@@ -229,17 +229,6 @@ pub fn build_router_with_body_limit(ctx: Arc<AppContext>, max_body_bytes: usize)
             get(crate::server::routes::models::list_models),
         )
         .route(
-            "/workers",
-            get(crate::server::routes::workers::list_workers)
-                .post(crate::server::routes::workers::create_worker),
-        )
-        .route(
-            "/workers/{*id}",
-            get(crate::server::routes::workers::get_worker)
-                .put(crate::server::routes::workers::replace_worker)
-                .delete(crate::server::routes::workers::remove_worker),
-        )
-        .route(
             "/v1/tokenize",
             post(crate::server::routes::tokenize::tokenize),
         )
@@ -310,10 +299,6 @@ pub fn build_router_with_body_limit(ctx: Arc<AppContext>, max_body_bytes: usize)
             post(crate::server::routes::cache::flush_cache),
         )
         .route(
-            crate::state::kv_events::bootstrap::SNAPSHOT_PATH,
-            get(crate::server::routes::cache::kv_snapshot),
-        )
-        .route(
             "/server_info",
             get(crate::server::routes::worker_info::server_info),
         )
@@ -334,6 +319,7 @@ pub fn build_router_with_body_limit(ctx: Arc<AppContext>, max_body_bytes: usize)
             "/get_model_info",
             get(crate::server::routes::worker_info::model_info),
         );
+    let router = crate::routing::register_routes(router);
     let router = crate::server::routes::unsupported::UNSUPPORTED_PATHS
         .iter()
         .fold(router, |router, path| {

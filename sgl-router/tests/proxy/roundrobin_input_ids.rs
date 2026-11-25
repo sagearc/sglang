@@ -235,7 +235,8 @@ async fn forwarding_opt_out_keeps_ingress_tokens_for_routing() {
         .tokenizers()
         .encode_chat(MODEL, &request)
         .unwrap();
-    ctx.policies
+    ctx.routing
+        .policies
         .insert(ModelId(MODEL.into()), Arc::new(ExpectTokens(expected)));
     assert_forwarded_unchanged(&ctx, &mock, &request).await;
 }

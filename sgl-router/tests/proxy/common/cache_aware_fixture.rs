@@ -140,8 +140,9 @@ fn radix_router_with(
         Arc::new(registry_of(workers, openai)),
         Arc::new(policies),
     );
-    ctx.radix_tree_prefix_provider = Some(RadixTreePrefixProvider::new(tree, Arc::clone(&oracle)));
-    ctx.block_size_oracle = oracle;
+    ctx.routing.radix_tree_prefix_provider =
+        Some(RadixTreePrefixProvider::new(tree, Arc::clone(&oracle)));
+    ctx.routing.block_size_oracle = oracle;
     build_router(Arc::new(ctx))
 }
 
@@ -162,11 +163,11 @@ pub fn reorg_radix_router(
         Arc::new(registry_of(workers, None)),
         Arc::new(PolicyRegistry::default()),
     );
-    ctx.chat_routing = ChatRouting::Reorg([(ModelId(MODEL.into()), resolver)].into());
-    ctx.radix_tree_prefix_provider = Some(RadixTreePrefixProvider::new(
+    ctx.routing.chat_routing = ChatRouting::Reorg([(ModelId(MODEL.into()), resolver)].into());
+    ctx.routing.radix_tree_prefix_provider = Some(RadixTreePrefixProvider::new(
         state.tree(),
         Arc::clone(&oracle),
     ));
-    ctx.block_size_oracle = oracle;
+    ctx.routing.block_size_oracle = oracle;
     build_router(Arc::new(ctx))
 }

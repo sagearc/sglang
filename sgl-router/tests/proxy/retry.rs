@@ -104,7 +104,7 @@ fn router_ctx(
         let (resolver, _) =
             sgl_router::policies_reorg::factory::build_resolver(&ctx.config.model, &state, None)
                 .unwrap();
-        ctx.chat_routing = ChatRouting::Reorg([(ModelId("tiny".into()), resolver)].into());
+        ctx.routing.chat_routing = ChatRouting::Reorg([(ModelId("tiny".into()), resolver)].into());
     }
     Arc::new(ctx)
 }
@@ -423,7 +423,8 @@ async fn retried_completions_keep_the_openai_response_format() {
             MockWorker::start_returning_error(StatusCode::SERVICE_UNAVAILABLE, rejected()).await;
         let ctx = router_ctx(&[], 2, false);
         for (id, worker) in [("ok", &ok), ("unavailable", &unavailable)] {
-            ctx.registry
+            ctx.routing
+                .registry
                 .add_with_cb(
                     spec(id, &worker.url, WorkerMode::Plain),
                     None,

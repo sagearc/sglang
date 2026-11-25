@@ -124,7 +124,7 @@ fn context(workers: &[(&str, Stage, &MockWorker)], buckets: Vec<Bucket>) -> Arc<
         // The reorg route must not require the legacy policy registry.
         Arc::new(PolicyRegistry::default()),
     );
-    ctx.chat_routing = ChatRouting::Reorg(
+    ctx.routing.chat_routing = ChatRouting::Reorg(
         [(
             ModelId("tiny".into()),
             BucketResolver::new(buckets).unwrap(),
@@ -159,7 +159,7 @@ async fn bucket_config_limits_reject_before_dispatch_and_admit_after_load_drops(
     let mut ctx = Arc::try_unwrap(context(&[("w", Stage::Plain, &worker)], vec![]))
         .unwrap_or_else(|_| panic!("context is not shared yet"));
     let state = KvEventIndex::new();
-    ctx.engine_reported_load = state.engine_reported_load();
+    ctx.routing.engine_reported_load = state.engine_reported_load();
     ctx.config.model.policy = PolicyKind::PowerOfTwo;
     // The group sets its usages; the CLI in-flight default still applies.
     ctx.config.model.reorg_admission.max_inflight_requests = Some(1);
@@ -174,9 +174,9 @@ async fn bucket_config_limits_reject_before_dispatch_and_admit_after_load_drops(
         .unwrap(),
     );
     let (resolver, _) = build_resolver(&ctx.config.model, &state, None).unwrap();
-    ctx.chat_routing = ChatRouting::Reorg([(ModelId("tiny".into()), resolver)].into());
+    ctx.routing.chat_routing = ChatRouting::Reorg([(ModelId("tiny".into()), resolver)].into());
     let ctx = Arc::new(ctx);
-    let engine = ctx.registry.get(&WorkerId("w".into())).unwrap();
+    let engine = ctx.routing.registry.get(&WorkerId("w".into())).unwrap();
     let app = build_router(ctx.clone());
     for (running, kv_tokens, inflight, expected) in [
         (1, 0, 0, StatusCode::SERVICE_UNAVAILABLE),
@@ -187,7 +187,7 @@ async fn bucket_config_limits_reject_before_dispatch_and_admit_after_load_drops(
         engine
             .active_requests
             .store(inflight, std::sync::atomic::Ordering::Relaxed);
-        ctx.engine_reported_load.set(
+        ctx.routing.engine_reported_load.set(
             &worker.url,
             0,
             LoadStat {
@@ -364,7 +364,8 @@ async fn missing_decode_in_all_buckets_does_not_dispatch_prefill() {
     assert!(policy.calls.lock().unwrap().is_empty());
     assert_eq!(ctx.router_inflight_load.inflight_count(), 0);
     assert_eq!(
-        ctx.registry
+        ctx.routing
+            .registry
             .get(&WorkerId("p".into()))
             .unwrap()
             .router_inflight_load(),
@@ -553,7 +554,8 @@ async fn decode_failure_retries_both_groups_in_next_bucket_without_dispatching_f
         assert!(first_prefill.captured.lock().unwrap().last_body.is_none());
         assert!(decode.captured.lock().unwrap().last_body.is_some());
         assert_eq!(
-            ctx.registry
+            ctx.routing
+                .registry
                 .get(&WorkerId("p1".into()))
                 .unwrap()
                 .router_inflight_load(),
@@ -731,8 +733,8 @@ async fn default_pd_groups_apply_configured_inflight_admission() {
     let (resolver, _) =
         sgl_router::policies_reorg::factory::build_resolver(&mutable.config.model, &state, None)
             .unwrap();
-    mutable.chat_routing = ChatRouting::Reorg([(ModelId("tiny".into()), resolver)].into());
-    let worker = ctx.registry.get(&WorkerId("d".into())).unwrap();
+    mutable.routing.chat_routing = ChatRouting::Reorg([(ModelId("tiny".into()), resolver)].into());
+    let worker = ctx.routing.registry.get(&WorkerId("d".into())).unwrap();
     let app = build_router(ctx);
     for (inflight, expected) in [(1, StatusCode::SERVICE_UNAVAILABLE), (0, StatusCode::OK)] {
         worker.active_requests.store(inflight, Ordering::Relaxed);
@@ -786,7 +788,7 @@ async fn portless_prefill_is_not_dispatched_until_bootstrap_is_resolved() {
                 ctx.config.clone(),
                 ctx.preprocessor.tokenizers().clone(),
                 ctx.proxy.clone(),
-                ctx.registry.clone(),
+                ctx.routing.registry.clone(),
                 Arc::new(build_policy_registry(&ctx.config).unwrap()),
             ));
         }
@@ -797,7 +799,7 @@ async fn portless_prefill_is_not_dispatched_until_bootstrap_is_resolved() {
             model_ids: vec![ModelId("tiny".into())],
             ..Default::default()
         };
-        ctx.registry.add(spec.clone()).unwrap();
+        ctx.routing.registry.add(spec.clone()).unwrap();
         let app = build_router(ctx.clone());
         let response = app.clone().oneshot(request(body("hello"))).await.unwrap();
         assert_eq!(
@@ -809,7 +811,7 @@ async fn portless_prefill_is_not_dispatched_until_bootstrap_is_resolved() {
         assert!(prefill.captured.lock().unwrap().last_body.is_none());
         assert!(decode.captured.lock().unwrap().last_body.is_none());
         spec.bootstrap_port = Some(8997);
-        ctx.registry.add(spec).unwrap();
+        ctx.routing.registry.add(spec).unwrap();
         let response = app.oneshot(request(body("hello"))).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK, "reorg={reorg}");
         let d: serde_json::Value =
@@ -849,10 +851,11 @@ async fn load_only_routing_forwards_messages_without_a_tokenizer() {
                 None,
             )
             .unwrap();
-            mutable.chat_routing = ChatRouting::Reorg([(ModelId("tiny".into()), resolver)].into());
+            mutable.routing.chat_routing =
+                ChatRouting::Reorg([(ModelId("tiny".into()), resolver)].into());
         } else {
-            mutable.chat_routing = ChatRouting::Legacy;
-            mutable.policies = Arc::new(build_policy_registry(&mutable.config).unwrap());
+            mutable.routing.chat_routing = ChatRouting::Legacy;
+            mutable.routing.policies = Arc::new(build_policy_registry(&mutable.config).unwrap());
         }
         let response = build_router(ctx)
             .oneshot(request(body("hello")))
@@ -982,7 +985,8 @@ async fn full_decode_group_falls_back_to_another_version_group() {
     .into_iter()
     .zip(&workers)
     {
-        ctx.registry
+        ctx.routing
+            .registry
             .add(WorkerSpec {
                 id: WorkerId(id.into()),
                 url: worker.url.clone(),

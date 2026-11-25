@@ -278,7 +278,7 @@ fn router_ctx_with(
     );
     if reorg {
         let (resolver, _) = build_resolver(&cfg.model, &KvEventIndex::new(), None).unwrap();
-        ctx.chat_routing = ChatRouting::Reorg([(ModelId("tiny".into()), resolver)].into());
+        ctx.routing.chat_routing = ChatRouting::Reorg([(ModelId("tiny".into()), resolver)].into());
     }
     Arc::new(ctx)
 }
@@ -504,7 +504,8 @@ async fn decode_dispatch_limit_gates_decode_as_over_http() {
             (WorkerMode::Prefill, "http://127.0.0.1:1", Some(prefill)),
             (WorkerMode::Decode, "http://127.0.0.1:2", Some(decode)),
         ]);
-        Arc::get_mut(&mut ctx).unwrap().decode_gate = DecodeGate::new(std::num::NonZeroU32::new(1));
+        Arc::get_mut(&mut ctx).unwrap().routing.decode_gate =
+            DecodeGate::new(std::num::NonZeroU32::new(1));
         let client = serve_grpc(ctx).await;
         let call = |mut client: SglangServiceClient<Channel>| async move {
             collect(client.generate(generate(streaming)).await)
@@ -667,7 +668,8 @@ async fn stream_outcomes_reach_the_breaker_by_status() {
         let ctx = router_ctx(&[(WorkerMode::Plain, "http://127.0.0.1:1", Some(port))]);
         let mut client = serve_grpc(Arc::clone(&ctx)).await;
         let breaker_state = || {
-            ctx.registry
+            ctx.routing
+                .registry
                 .get(&WorkerId("http://127.0.0.1:1".into()))
                 .unwrap()
                 .breaker

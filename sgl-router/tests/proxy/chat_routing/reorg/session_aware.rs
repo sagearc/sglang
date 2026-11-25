@@ -27,9 +27,13 @@ async fn session_aware_reuses_custom_header_binding_after_load_changes() {
     let (resolver, cleanup) =
         sgl_router::policies_reorg::factory::build_resolver(&mutable.config.model, &state, None)
             .unwrap();
-    mutable.chat_routing = ChatRouting::Reorg([(ModelId("tiny".into()), resolver)].into());
-    let primary_worker = ctx.registry.get(&WorkerId("primary".into())).unwrap();
-    let other_worker = ctx.registry.get(&WorkerId("other".into())).unwrap();
+    mutable.routing.chat_routing = ChatRouting::Reorg([(ModelId("tiny".into()), resolver)].into());
+    let primary_worker = ctx
+        .routing
+        .registry
+        .get(&WorkerId("primary".into()))
+        .unwrap();
+    let other_worker = ctx.routing.registry.get(&WorkerId("other".into())).unwrap();
     other_worker.active_requests.store(10, Ordering::Relaxed);
     let app = build_router(ctx);
     for _ in 0..2 {
@@ -102,7 +106,11 @@ async fn rejected_session_binding_advances_buckets_without_reassignment_or_dispa
         session_key: Some("same-session"),
         ..PickRequest::new(&model, Stage::Plain, 1)
     };
-    let engine = ctx.registry.get(&WorkerId("primary".into())).unwrap();
+    let engine = ctx
+        .routing
+        .registry
+        .get(&WorkerId("primary".into()))
+        .unwrap();
     seed.pick(std::slice::from_ref(&engine), &pick_request)
         .await
         .unwrap();

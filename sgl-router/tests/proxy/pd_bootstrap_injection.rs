@@ -226,6 +226,7 @@ async fn round_robin_pd_prefill_does_not_track_dispatch_timestamps() {
         },
     ]);
     let prefill_worker = ctx
+        .routing
         .registry
         .workers_for(&ModelId("tiny".into()))
         .into_iter()

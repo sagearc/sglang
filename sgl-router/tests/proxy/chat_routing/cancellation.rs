@@ -119,7 +119,7 @@ async fn only_unfinished_requests_abort() {
         assert!(crate::common::is_engine_shaped_rid(
             forwarded["rid"].as_str().unwrap()
         ));
-        let worker = h.ctx.registry.get(&WorkerId("w1".into())).unwrap();
+        let worker = h.ctx.routing.registry.get(&WorkerId("w1".into())).unwrap();
         if hold && (!stream || before_headers) {
             worker.breaker.record_failure();
             worker.breaker.record_failure();

@@ -1,25 +1,16 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::buckets_reorg::BucketResolver;
 use crate::config::Config;
-use crate::discovery::ModelId;
-
-use crate::policies::buckets::BucketSelector;
-use crate::policies::PolicyRegistry;
 use crate::proxy::Proxy;
+pub use crate::routing::ChatRouting;
+use crate::routing::RoutingState;
 use crate::server::inflight::InflightHttp;
 use crate::server::metrics::MetricsRegistry;
 use crate::server::routes::chat::Preprocessor;
-use crate::state::kv_events::{
-    BlockSizeOracle, KvEventIndex, KvIndexMetrics, RadixTreePrefixProvider,
-};
-use crate::state::load_monitor::engine_reported_load::EngineReportedLoadTable;
 use crate::state::load_monitor::router_inflight_load::RouterInflightLoadRegistry;
 use crate::tokenizer::TokenizerRegistry;
-use crate::workers::control::WorkerControlService;
-use crate::workers::{DecodeGate, WorkerRegistry};
-use std::collections::HashMap;
+
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
@@ -32,139 +23,46 @@ const READINESS_NOT_READY: u8 = 0;
 const READINESS_READY: u8 = 1;
 const READINESS_DRAINING: u8 = 2;
 
-/// Routing implementation used by the standard chat-completions endpoint.
-/// `--chat-routing reorg` builds resolvers with the selected reorg policy.
-#[derive(Debug, Default)]
-pub enum ChatRouting {
-    #[default]
-    Legacy,
-    Reorg(HashMap<ModelId, BucketResolver>),
-}
-
-impl ChatRouting {
-    /// Whether the built routing reads request tokens; `legacy` holds the legacy policies.
-    pub fn needs_request_tokens(&self, legacy: &PolicyRegistry) -> bool {
-        match self {
-            Self::Legacy => legacy.needs_request_tokens(),
-            Self::Reorg(resolvers) => resolvers.values().any(BucketResolver::needs_request_tokens),
-        }
-    }
-}
-
 pub struct AppContext {
     pub config: Config,
     pub preprocessor: Preprocessor,
     pub proxy: Arc<Proxy>,
-    pub registry: Arc<WorkerRegistry>,
-    pub worker_control: Option<Arc<WorkerControlService>>,
-    pub policies: Arc<PolicyRegistry>,
-    /// Converts static Bucket configuration into request candidate domains.
-    pub bucket_selector: Arc<BucketSelector>,
-    /// Select legacy policies or model-specific bucket-first routing.
-    pub chat_routing: ChatRouting,
+    pub routing: RoutingState,
     /// Per-worker active-load bookkeeping shared by the proxy, policies,
     /// timeout janitor, and metrics.
     pub router_inflight_load: Arc<RouterInflightLoadRegistry>,
-    pub decode_gate: DecodeGate,
     /// Lightweight Prometheus-format metrics registry served via
     /// `/metrics`. Shared with the edge middleware (requests_total /
     /// responses_total), the chat handler (worker_requests_total), the
     /// active-load registry, policy-specific counters, and PD dispatch.
     pub metrics: Arc<MetricsRegistry>,
-    /// Shared Engine LoadStat table; ingress captures one immutable snapshot per request.
-    pub engine_reported_load: Arc<EngineReportedLoadTable>,
-    pub prefix_index: Option<Arc<dyn sgl_kv_indexer::PrefixIndex>>,
-    pub radix_tree_prefix_provider: Option<RadixTreePrefixProvider>,
-    /// Local KV tree for `--dp-aware` rank selection, under any policy.
-    pub dp_rank_prefix_provider: Option<RadixTreePrefixProvider>,
-    pub block_size_oracle: Arc<BlockSizeOracle>,
-    /// Read-only handles `/metrics` pulls the KV storage-tier series from on
-    /// scrape. `None` when this router maintains no local tree (external
-    /// Indexer), where those series would all be a structural zero — see
-    /// [`crate::state::kv_events::KvEventIndex::metrics_source`].
-    pub kv_metrics: Option<KvIndexMetrics>,
     /// Open HTTP exchanges, on every route. What axum's graceful shutdown
     /// is actually waiting on during the drain — `router_inflight_load` sees only the
     /// proxied subset.
     pub inflight_http: Arc<InflightHttp>,
-    /// The local KV-event index; `None` in metadata-only mode, which makes
-    /// `/internal/kv_snapshot` a 404. See [`KvEventIndex::snapshot_source`].
-    pub kv_index: Option<Arc<KvEventIndex>>,
     readiness: AtomicU8,
 }
 
 impl AppContext {
-    pub fn new(
+    pub(crate) fn from_parts(
         config: Config,
         tokenizers: Arc<TokenizerRegistry>,
         proxy: Arc<Proxy>,
-        registry: Arc<WorkerRegistry>,
-        policies: Arc<PolicyRegistry>,
-    ) -> Self {
-        Self::with_router_inflight_load(
-            config,
-            tokenizers,
-            proxy,
-            registry,
-            policies,
-            RouterInflightLoadRegistry::with_defaults(),
-        )
-    }
-
-    /// Construct an [`AppContext`] with an explicit [`RouterInflightLoadRegistry`].
-    /// Production wires the default (5-minute timeout, SystemTimeClock)
-    /// via [`Self::new`]; tests that exercise the janitor pass a registry
-    /// built with a `MockClock`.
-    pub fn with_router_inflight_load(
-        config: Config,
-        tokenizers: Arc<TokenizerRegistry>,
-        proxy: Arc<Proxy>,
-        registry: Arc<WorkerRegistry>,
-        policies: Arc<PolicyRegistry>,
+        routing: RoutingState,
         router_inflight_load: Arc<RouterInflightLoadRegistry>,
+        metrics: Arc<MetricsRegistry>,
     ) -> Self {
-        let metrics = MetricsRegistry::new();
-        // Wire the per-worker active-load gauge so `sgl_router_active_load`
-        // mirrors the live counter on every register / drop / sweep.
-        // Without this, the metric is permanently 0 in production even
-        // though the chat handler is faithfully calling `register`.
         router_inflight_load.attach_metrics(Arc::clone(&metrics));
-        // The metrics registry is built after the policy registry, so attach
-        // it here for policies that emit their own counters.
-        policies.attach_metrics(Arc::clone(&metrics));
-        let bucket_selector = Arc::new(BucketSelector::new(config.model.bucket_config.clone()));
-        let decode_gate = DecodeGate::new(config.proxy.decode_dispatch_limit);
         Self {
             preprocessor: Preprocessor::new(&config.model, tokenizers, Arc::clone(&metrics)),
             config,
             proxy,
-            registry,
-            worker_control: None,
-            policies,
-            bucket_selector,
-            chat_routing: ChatRouting::Legacy,
+            routing,
             router_inflight_load,
-            decode_gate,
             metrics,
-            prefix_index: None,
-            radix_tree_prefix_provider: None,
-            dp_rank_prefix_provider: None,
-            block_size_oracle: BlockSizeOracle::new(),
-            kv_metrics: None,
-            kv_index: None,
-            engine_reported_load: EngineReportedLoadTable::new(),
             inflight_http: InflightHttp::new(),
             readiness: AtomicU8::new(READINESS_NOT_READY),
         }
-    }
-
-    /// Readiness conditions 3 and 4, via
-    /// [`BootstrapTracker::admit_ready`](crate::state::kv_events::BootstrapTracker::admit_ready).
-    /// Always true when this router holds no KV index.
-    pub fn kv_bootstrap_admit_ready(&self) -> bool {
-        self.kv_index
-            .as_ref()
-            .is_none_or(|idx| idx.bootstrap().admit_ready())
     }
 
     /// Report bootstrap as finished, unless the pod has already begun draining.
@@ -246,33 +144,21 @@ impl AppContext {
             proxy: crate::config::ProxyConfig::default(),
             router_inflight_load: crate::config::InflightLoadConfig::default(),
         };
+        Self::test_context(config, Arc::new(TokenizerRegistry::default()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_context(config: Config, tokenizers: Arc<TokenizerRegistry>) -> Self {
         let metrics = MetricsRegistry::new();
-        Self {
-            preprocessor: Preprocessor::new(
-                &config.model,
-                Arc::new(TokenizerRegistry::default()),
-                Arc::clone(&metrics),
-            ),
+        let routing = RoutingState::test_state(&config, &metrics);
+        Self::from_parts(
             config,
-            proxy: Arc::new(Proxy::new(std::time::Duration::from_secs(60)).expect("stub proxy")),
-            registry: Arc::new(WorkerRegistry::default()),
-            worker_control: None,
-            policies: Arc::new(PolicyRegistry::default()),
-            bucket_selector: Arc::new(BucketSelector::new(None)),
-            chat_routing: ChatRouting::Legacy,
-            router_inflight_load: RouterInflightLoadRegistry::with_defaults(),
-            decode_gate: DecodeGate::new(None),
+            tokenizers,
+            Arc::new(Proxy::new(std::time::Duration::from_secs(60)).expect("test proxy")),
+            routing,
+            RouterInflightLoadRegistry::with_defaults(),
             metrics,
-            prefix_index: None,
-            radix_tree_prefix_provider: None,
-            dp_rank_prefix_provider: None,
-            block_size_oracle: BlockSizeOracle::new(),
-            kv_metrics: None,
-            kv_index: None,
-            engine_reported_load: EngineReportedLoadTable::new(),
-            inflight_http: InflightHttp::new(),
-            readiness: AtomicU8::new(READINESS_NOT_READY),
-        }
+        )
     }
 }
 

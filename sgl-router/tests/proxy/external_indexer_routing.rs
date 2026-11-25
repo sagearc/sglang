@@ -112,7 +112,7 @@ async fn external_indexer_routes_to_the_cached_worker() {
         registry,
         policies,
     );
-    ctx.prefix_index = Some(Arc::new(
+    ctx.routing.prefix_index = Some(Arc::new(
         GrpcPrefixIndex::new(PrefixIndexConfig {
             endpoint,
             query_deadline: Duration::from_secs(1),
@@ -120,7 +120,7 @@ async fn external_indexer_routes_to_the_cached_worker() {
         })
         .unwrap(),
     ));
-    ctx.block_size_oracle = oracle;
+    ctx.routing.block_size_oracle = oracle;
 
     let app = build_router(Arc::new(ctx));
     let response = app

@@ -94,6 +94,7 @@ pub async fn remove_worker(
 
 fn control(context: &AppContext) -> Result<&Arc<WorkerControlService>, ApiError> {
     context
+        .routing
         .worker_control
         .as_ref()
         .ok_or_else(|| WorkerControlError::Unavailable.into())
@@ -206,9 +207,11 @@ mod tests {
     ) {
         let mut context = AppContext::stub();
         enable_worker_management(&mut context);
-        let (control, rx) =
-            WorkerControlService::new(Arc::clone(&context.registry), ExternalWorkerSource::Static);
-        context.worker_control = Some(Arc::clone(&control));
+        let (control, rx) = WorkerControlService::new(
+            Arc::clone(&context.routing.registry),
+            ExternalWorkerSource::Static,
+        );
+        context.routing.worker_control = Some(Arc::clone(&control));
         (Arc::new(context), control, rx)
     }
 
@@ -276,10 +279,10 @@ mod tests {
         let (worker_url, introspection_started) = spawn_slow_fake_worker().await;
         let mut context = AppContext::stub();
         enable_worker_management(&mut context);
-        let registry = Arc::clone(&context.registry);
+        let registry = Arc::clone(&context.routing.registry);
         let (control, control_rx) =
             WorkerControlService::new(Arc::clone(&registry), ExternalWorkerSource::Kubernetes);
-        context.worker_control = Some(Arc::clone(&control));
+        context.routing.worker_control = Some(Arc::clone(&control));
         let (discovery_tx, discovery_rx) = tokio::sync::mpsc::channel(4);
         let manager = tokio::spawn(crate::workers::manager::run_with_config_and_control(
             discovery_rx,
@@ -427,6 +430,7 @@ mod tests {
     async fn get_worker_accepts_discovery_id_with_slash() {
         let (context, _control, _control_rx) = context_with_control();
         context
+            .routing
             .registry
             .add(WorkerSpec {
                 id: WorkerId("default/uid".into()),
@@ -454,10 +458,12 @@ mod tests {
     #[tokio::test]
     async fn worker_mutations_are_unavailable_without_management_key() {
         let mut context = AppContext::stub();
-        let registry = Arc::clone(&context.registry);
-        let (control, _control_rx) =
-            WorkerControlService::new(Arc::clone(&context.registry), ExternalWorkerSource::Static);
-        context.worker_control = Some(control);
+        let registry = Arc::clone(&context.routing.registry);
+        let (control, _control_rx) = WorkerControlService::new(
+            Arc::clone(&context.routing.registry),
+            ExternalWorkerSource::Static,
+        );
+        context.routing.worker_control = Some(control);
         registry
             .add(WorkerSpec {
                 id: WorkerId("read-only-worker".into()),
@@ -592,7 +598,7 @@ mod tests {
         let response = build_router(Arc::new({
             let mut context = AppContext::stub();
             enable_worker_management(&mut context);
-            context.worker_control = Some(control);
+            context.routing.worker_control = Some(control);
             context
         }))
         .oneshot(request)
@@ -606,6 +612,7 @@ mod tests {
     async fn delete_rejects_discovery_managed_worker() {
         let (context, _control, _control_rx) = context_with_control();
         context
+            .routing
             .registry
             .add(WorkerSpec {
                 id: WorkerId("discovered".into()),
@@ -695,10 +702,10 @@ mod tests {
         let worker_url = spawn_fake_worker().await;
         let mut context = AppContext::stub();
         enable_worker_management(&mut context);
-        let registry = Arc::clone(&context.registry);
+        let registry = Arc::clone(&context.routing.registry);
         let (control, control_rx) =
             WorkerControlService::new(Arc::clone(&registry), ExternalWorkerSource::Static);
-        context.worker_control = Some(Arc::clone(&control));
+        context.routing.worker_control = Some(Arc::clone(&control));
         let context = Arc::new(context);
         let (discovery_tx, discovery_rx) = tokio::sync::mpsc::channel(1);
         let manager = tokio::spawn(crate::workers::manager::run_with_config_and_control(
@@ -773,10 +780,10 @@ mod tests {
         let barrier_url = spawn_fake_worker().await;
         let mut context = AppContext::stub();
         enable_worker_management(&mut context);
-        let registry = Arc::clone(&context.registry);
+        let registry = Arc::clone(&context.routing.registry);
         let (control, control_rx) =
             WorkerControlService::new(Arc::clone(&registry), ExternalWorkerSource::Kubernetes);
-        context.worker_control = Some(Arc::clone(&control));
+        context.routing.worker_control = Some(Arc::clone(&control));
         let (discovery_tx, discovery_rx) = tokio::sync::mpsc::channel(4);
         let manager = tokio::spawn(crate::workers::manager::run_with_config_and_control(
             discovery_rx,
@@ -860,10 +867,10 @@ mod tests {
         let barrier_url = spawn_fake_worker().await;
         let mut context = AppContext::stub();
         enable_worker_management(&mut context);
-        let registry = Arc::clone(&context.registry);
+        let registry = Arc::clone(&context.routing.registry);
         let (control, control_rx) =
             WorkerControlService::new(Arc::clone(&registry), ExternalWorkerSource::Kubernetes);
-        context.worker_control = Some(Arc::clone(&control));
+        context.routing.worker_control = Some(Arc::clone(&control));
         let (discovery_tx, discovery_rx) = tokio::sync::mpsc::channel(4);
         let manager = tokio::spawn(crate::workers::manager::run_with_config_and_control(
             discovery_rx,
@@ -955,10 +962,10 @@ mod tests {
         let (worker_url, introspection_started) = spawn_slow_fake_worker().await;
         let mut context = AppContext::stub();
         enable_worker_management(&mut context);
-        let registry = Arc::clone(&context.registry);
+        let registry = Arc::clone(&context.routing.registry);
         let (control, control_rx) =
             WorkerControlService::new(Arc::clone(&registry), ExternalWorkerSource::Kubernetes);
-        context.worker_control = Some(Arc::clone(&control));
+        context.routing.worker_control = Some(Arc::clone(&control));
         let (discovery_tx, discovery_rx) = tokio::sync::mpsc::channel(4);
         let manager = tokio::spawn(crate::workers::manager::run_with_config_and_control(
             discovery_rx,
@@ -1044,10 +1051,10 @@ mod tests {
         let barrier_url = spawn_fake_worker().await;
         let mut context = AppContext::stub();
         enable_worker_management(&mut context);
-        let registry = Arc::clone(&context.registry);
+        let registry = Arc::clone(&context.routing.registry);
         let (control, control_rx) =
             WorkerControlService::new(Arc::clone(&registry), ExternalWorkerSource::Kubernetes);
-        context.worker_control = Some(Arc::clone(&control));
+        context.routing.worker_control = Some(Arc::clone(&control));
         let (discovery_tx, discovery_rx) = tokio::sync::mpsc::channel(2);
         let manager = tokio::spawn(crate::workers::manager::run_with_config_and_control(
             discovery_rx,

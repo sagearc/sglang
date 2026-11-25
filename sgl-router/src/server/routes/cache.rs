@@ -112,7 +112,7 @@ pub async fn kv_snapshot(
     headers: HeaderMap,
     Query(params): Query<SnapshotParams>,
 ) -> Response {
-    let Some(index) = ctx.kv_index.as_ref() else {
+    let Some(index) = ctx.routing.kv_index.as_ref() else {
         return json_error(
             StatusCode::NOT_FOUND,
             "cache-aware KV indexing is not enabled on this router",
@@ -233,7 +233,7 @@ pub async fn flush_cache(
     headers: HeaderMap,
     Query(params): Query<FlushParams>,
 ) -> Response {
-    let workers = ctx.registry.all();
+    let workers = ctx.routing.registry.all();
     let total_workers = workers.len();
 
     if workers.is_empty() {
@@ -384,7 +384,8 @@ mod tests {
     fn ctx_with_workers(urls: &[&str]) -> Arc<AppContext> {
         let ctx = AppContext::stub();
         for (i, url) in urls.iter().enumerate() {
-            ctx.registry
+            ctx.routing
+                .registry
                 .add(WorkerSpec {
                     id: WorkerId(format!("w-{i}")),
                     url: (*url).to_string(),
@@ -565,7 +566,8 @@ mod tests {
         let (p_url, _s1) = spawn_fake_flush_worker(StatusCode::OK).await;
         let (d_url, _s2) = spawn_fake_flush_worker(StatusCode::OK).await;
         let ctx = AppContext::stub();
-        ctx.registry
+        ctx.routing
+            .registry
             .add(WorkerSpec {
                 id: WorkerId("p".into()),
                 url: p_url.clone(),
@@ -575,7 +577,8 @@ mod tests {
                 ..Default::default()
             })
             .expect("prefill accepted");
-        ctx.registry
+        ctx.routing
+            .registry
             .add(WorkerSpec {
                 id: WorkerId("d".into()),
                 url: d_url.clone(),
@@ -616,7 +619,7 @@ mod tests {
         index.block_size_oracle().try_set(64).unwrap();
         index.block_size_oracle().set_bigram(false);
         let mut ctx = AppContext::stub();
-        ctx.kv_index = index.snapshot_source();
+        ctx.routing.kv_index = index.snapshot_source();
         Arc::new(ctx)
     }
 
@@ -663,7 +666,7 @@ mod tests {
         };
         use crate::state::kv_events::BlockStored;
         let ctx = ctx_with_seeded_index();
-        let index = ctx.kv_index.as_ref().unwrap().clone();
+        let index = ctx.routing.kv_index.as_ref().unwrap().clone();
         let worker = KvWorkerId::new("http://carrier:30000".into(), 0);
         index.tree().store_event(
             &worker,
@@ -861,7 +864,8 @@ mod tests {
         // The export cache is now warm. A rank first seen after it was filled
         // must still appear in the next probe, which it cannot if the probe
         // answered from the cached export.
-        ctx.kv_index
+        ctx.routing
+            .kv_index
             .as_ref()
             .unwrap()
             .seed_cursor_only_for_test(&KvWorkerId::new("http://late:30000".into(), 0), 5);
@@ -885,7 +889,7 @@ mod tests {
         index.block_size_oracle().try_set(64).unwrap(); // no bigram report yet
         index.seed_stored_block_for_test(&KvWorkerId::new("http://carrier:30000".into(), 0), 1, 7);
         let mut ctx = AppContext::stub();
-        ctx.kv_index = index.snapshot_source();
+        ctx.routing.kv_index = index.snapshot_source();
 
         let snap = parse_snapshot(get_snapshot(Arc::new(ctx), SNAPSHOT_PATH).await).await;
         assert!(

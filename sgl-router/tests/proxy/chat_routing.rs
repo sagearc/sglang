@@ -1953,7 +1953,8 @@ async fn streaming_error_event_records_outcome_without_tripping_breaker() {
         r#"sgl_router_responses_total{route="/v1/chat/completions",method="POST",status_code="200"} 1"#
     ));
     assert!(
-        ctx.registry
+        ctx.routing
+            .registry
             .all()
             .iter()
             .all(|worker| worker.breaker.would_allow()),

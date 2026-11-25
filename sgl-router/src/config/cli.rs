@@ -3,26 +3,56 @@
 
 //! Grouped CLI options and conversion into a validated [`Config`].
 
-use anyhow::{anyhow, bail, ensure, Context, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 use clap::Parser;
-use reqwest::header::HeaderValue;
 use std::num::NonZeroU32;
 
-use crate::config::sampling::{parse_sampling_overrides, ConflictPolicy};
+use crate::config::common_cli::{bearer, model_options};
+pub use crate::config::common_cli::{ModelArgs, ServerArgs};
 use crate::config::types::is_selector_empty;
 use crate::config::{
-    default_cb_cool_down, default_cb_threshold, default_host, default_port,
-    default_proxy_request_timeout_secs, default_shutdown_drain_secs,
-    default_stale_request_timeout_secs, resolve_mode, AffinityConfig, AffinityMode, BalancedBy,
-    CacheAwareConfig, CachePrefixProvider, ChatRoutingKind, CircuitBreakerConfig, Config,
-    DecodePolicyKind, DiscoveryBackend, DpRankPolicy, EligibilityConfig, FilterKind, FusedTerm,
-    InflightLoadConfig, K8sDiscoveryConfig, K8sDiscoveryMode, KvIndexerEndpointConfig, LogFormat,
+    default_cb_cool_down, default_cb_threshold, resolve_mode, AffinityConfig, AffinityMode,
+    BalancedBy, CacheAwareConfig, CachePrefixProvider, ChatRoutingKind, CircuitBreakerConfig,
+    Config, DecodePolicyKind, DiscoveryBackend, DpRankPolicy, EligibilityConfig, FilterKind,
+    FusedTerm, InflightLoadConfig, K8sDiscoveryConfig, K8sDiscoveryMode, KvIndexerEndpointConfig,
     ModelConfig, ObservabilityConfig, PolicyKind, ProxyConfig, ServerConfig, SessionAffinityMode,
-    StaticUrlsDiscoveryConfig, StickyConfig, StickyFallbackKind, TokenizerBackend, TokenizerConfig,
-    DEFAULT_FUSE, DEFAULT_KV_BOOTSTRAP_FETCH_TIMEOUT_CAP_MS, DEFAULT_KV_BOOTSTRAP_TIMEOUT_MS,
+    StaticUrlsDiscoveryConfig, StickyConfig, StickyFallbackKind, TokenizerConfig, DEFAULT_FUSE,
+    DEFAULT_KV_BOOTSTRAP_FETCH_TIMEOUT_CAP_MS, DEFAULT_KV_BOOTSTRAP_TIMEOUT_MS,
 };
+#[cfg(test)]
+use crate::config::{ConflictPolicy, LogFormat, TokenizerBackend};
 use crate::policies_reorg::admission::AdmissionLimits;
 use crate::policies_reorg::factory::AffinitySpec;
+
+#[derive(clap::Args, Debug)]
+pub struct RoutingServerArgs {
+    /// API key required by Worker management mutation endpoints.
+    #[arg(long)]
+    pub worker_management_api_key: Option<String>,
+
+    /// Dispatch attempts per request, including the first. A request that fails
+    /// before any response reaches the client (transport error, 5xx, 429) is
+    /// retried on a worker it has not tried yet. 1 disables retries; 3 is typical.
+    #[arg(long, default_value_t = ProxyConfig::default().max_attempts)]
+    pub retry_max_attempts: NonZeroU32,
+    /// Backoff before the first retry, in milliseconds; doubles per retry, with
+    /// jitter. 0 retries immediately.
+    #[arg(long, default_value_t = ProxyConfig::default().initial_backoff_ms)]
+    pub retry_initial_backoff_ms: u64,
+    /// Upper bound on the backoff between retries, in milliseconds.
+    #[arg(long, default_value_t = ProxyConfig::default().max_backoff_ms)]
+    pub retry_max_backoff_ms: u64,
+    /// PD: return decode's stream only once prefill completes.
+    #[arg(long)]
+    pub pd_stream_after_prefill: bool,
+
+    /// PD: at most N requests per prefill DP rank go to decode before their
+    /// first token; the rest wait and get their decode DP rank when sent.
+    /// Needs prefill engines with --optimistic-prefill-attempts above 0 or
+    /// --disaggregation-decode-allocation-policy prefill_complete; others are refused.
+    #[arg(long)]
+    pub decode_dispatch_limit: Option<NonZeroU32>,
+}
 
 const DEFAULT_KV_INDEXER_QUERY_TIMEOUT_MS: u64 = 100;
 const DEFAULT_KV_INDEXER_QUERY_MAX_INFLIGHT: usize = sgl_kv_indexer::DEFAULT_QUERY_MAX_INFLIGHT;
@@ -59,149 +89,6 @@ pub struct Cli {
         next_help_heading = "Session affinity, sticky routing and pressure guards"
     )]
     pub affinity: AffinityArgs,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct ModelArgs {
-    /// Model id this router serves (the OpenAI `model` field).
-    #[arg(long)]
-    pub model_id: String,
-
-    /// Extra `model` value rewritten to --model-id in the forwarded body (repeatable),
-    /// preserving a LoRA suffix. /v1/models lists only --model-id.
-    #[arg(long = "model-alias", value_name = "MODEL")]
-    pub model_alias: Vec<String>,
-
-    /// Local tokenizer.json or HuggingFace repo id. Defaults to --model-id; honors HF_TOKEN / HF_HOME.
-    #[arg(long)]
-    pub tokenizer_path: Option<String>,
-
-    /// Skip loading a tokenizer; workers tokenize requests. Load-only policies only:
-    /// cache-aware routing, prefix-cache terms or filters, and length buckets require one.
-    #[arg(long, conflicts_with = "tokenizer_path")]
-    pub no_tokenizer: bool,
-
-    /// Disable generated input_ids; workers tokenize messages, while routing still renders locally.
-    /// Use for worker parser/template overrides or template stop strings.
-    #[arg(long)]
-    pub disable_input_ids_forwarding: bool,
-
-    /// Encode backend for router tokenization. fast uses fastokens for encoding and HF for
-    /// decoding, falling back to hf when fastokens cannot load the tokenizer.
-    #[arg(long, value_enum, default_value = "hf", value_name = "BACKEND")]
-    pub tokenizer_backend: TokenizerBackend,
-
-    /// L1 prefix-tokenization cache budget in MiB; 0 disables it. Reuses the tokens of a
-    /// previously encoded prompt up to its deepest shared special-token boundary, so a
-    /// multi-turn chat encodes only its new turns.
-    #[arg(long, default_value_t = 0, value_name = "MB")]
-    pub tokenizer_l1_cache_mb: usize,
-
-    /// Same as SGLang's --default-chat-template-kwargs; must match the workers.
-    #[arg(long, value_name = "JSON")]
-    pub default_chat_template_kwargs: Option<String>,
-
-    /// Fleet sampling defaults as JSON, e.g. {"temperature": 1, "top_p": 0.95}.
-    /// Accepts temperature, top_p, top_k, min_p, repetition_penalty,
-    /// frequency_penalty, presence_penalty, and n. Numeric values fill absent
-    /// fields; {"min": LO, "max": HI} bands only constrain supplied values
-    /// and require reject mode. See REFERENCE.md for domains and null handling.
-    #[arg(long, value_name = "JSON")]
-    pub override_sampling_params: Option<String>,
-
-    /// How to handle sampling values that differ from configured defaults:
-    /// reject returns 400 before admission; allow forwards the client value.
-    /// Defaults to reject. Requires --override-sampling-params.
-    #[arg(
-        long,
-        value_enum,
-        value_name = "MODE",
-        requires = "override_sampling_params"
-    )]
-    pub sampling_param_conflict: Option<ConflictPolicy>,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct ServerArgs {
-    /// Address to bind the HTTP server to.
-    #[arg(long, default_value_t = default_host())]
-    pub host: String,
-
-    /// Port to bind the HTTP server to.
-    #[arg(long, default_value_t = default_port())]
-    pub port: u16,
-
-    /// Port for the native gRPC server (`sglang.api.v1.SglangService`, which
-    /// engines serve with `--grpc-port`); requests reach engines over their gRPC port.
-    #[arg(long)]
-    pub grpc_port: Option<u16>,
-
-    /// Keep serving after SIGTERM with /readyz returning 503 before stopping accepts.
-    /// Leave time in the pod grace period for in-flight requests; cover readiness
-    /// probe failureThreshold * periodSeconds when probe-driven. 0 disables the pause.
-    #[arg(long, default_value_t = default_shutdown_drain_secs())]
-    pub shutdown_drain_secs: u64,
-
-    /// Pod terminationGracePeriodSeconds for the startup drain-budget check.
-    /// Omitting this assumes 30 seconds; this flag does not change the pod spec.
-    #[arg(long)]
-    pub termination_grace_secs: Option<u64>,
-
-    /// API key the router sends on its own requests to workers (`/server_info`,
-    /// `/model_info`). Set it to the engines' `--api-key`.
-    #[arg(long)]
-    pub worker_api_key: Option<String>,
-
-    /// API key required by Worker management mutation endpoints.
-    #[arg(long)]
-    pub worker_management_api_key: Option<String>,
-
-    /// Upstream timeout in seconds: the whole response of a non-streaming request,
-    /// the response headers of a streaming one. SGLang's chat endpoint sends those
-    /// headers with the first token, so for streaming chat this bounds time to
-    /// first token, queueing included. Must be greater than zero.
-    #[arg(long, default_value_t = default_proxy_request_timeout_secs())]
-    pub request_timeout_secs: u64,
-    /// Maximum silence between upstream stream chunks, in seconds.
-    #[arg(long, default_value_t = ProxyConfig::default().stream_idle_timeout_secs)]
-    pub stream_idle_timeout_secs: u64,
-
-    /// Dispatch attempts per request, including the first. A request that fails
-    /// before any response reaches the client (transport error, 5xx, 429) is
-    /// retried on a worker it has not tried yet. 1 disables retries; 3 is typical.
-    #[arg(long, default_value_t = ProxyConfig::default().max_attempts)]
-    pub retry_max_attempts: NonZeroU32,
-    /// Backoff before the first retry, in milliseconds; doubles per retry, with
-    /// jitter. 0 retries immediately.
-    #[arg(long, default_value_t = ProxyConfig::default().initial_backoff_ms)]
-    pub retry_initial_backoff_ms: u64,
-    /// Upper bound on the backoff between retries, in milliseconds.
-    #[arg(long, default_value_t = ProxyConfig::default().max_backoff_ms)]
-    pub retry_max_backoff_ms: u64,
-    /// PD: return decode's stream only once prefill completes.
-    #[arg(long)]
-    pub pd_stream_after_prefill: bool,
-
-    /// PD: at most N requests per prefill DP rank go to decode before their
-    /// first token; the rest wait and get their decode DP rank when sent.
-    /// Needs prefill engines with --optimistic-prefill-attempts above 0 or
-    /// --disaggregation-decode-allocation-policy prefill_complete; others are refused.
-    #[arg(long)]
-    pub decode_dispatch_limit: Option<NonZeroU32>,
-
-    /// Maximum in-flight request lifetime in seconds, including streaming responses.
-    /// Expiry returns 504 `stale_request_expired` before response headers are sent;
-    /// after streaming starts, it aborts the body without changing the HTTP status.
-    #[arg(long, default_value_t = default_stale_request_timeout_secs())]
-    pub stale_request_timeout_secs: u64,
-
-    /// Default tracing level (overridden by `RUST_LOG`).
-    #[arg(long, default_value = "info")]
-    pub log_level: String,
-
-    /// Log output format.
-    #[arg(long, value_enum, default_value = "text")]
-    pub log_format: LogFormat,
 }
 
 #[derive(clap::Args, Debug)]
@@ -546,6 +433,10 @@ pub struct AffinityArgs {
 }
 
 impl Cli {
+    pub fn chat_routing(&self) -> ChatRoutingKind {
+        self.routing.chat_routing
+    }
+
     /// Resolve CLI options and validate the resulting configuration.
     pub fn into_config(mut self) -> Result<Config> {
         let reorg = self.routing.chat_routing == ChatRoutingKind::Reorg;
@@ -648,27 +539,7 @@ impl Cli {
         let eligibility = self.routing.build_eligibility(reorg)?;
         let reorg_admission = self.routing.build_reorg_admission()?;
         let sticky = self.affinity.into_sticky_config(self.routing.policy)?;
-        let sampling_overrides = self
-            .model
-            .override_sampling_params
-            .as_deref()
-            .map(|raw| {
-                parse_sampling_overrides(
-                    raw,
-                    self.model.sampling_param_conflict.unwrap_or_default(),
-                )
-            })
-            .transpose()?
-            .unwrap_or_default();
-        let default_chat_template_kwargs = self
-            .model
-            .default_chat_template_kwargs
-            .as_deref()
-            .map(serde_json::from_str)
-            .transpose()
-            .context("--default-chat-template-kwargs must be a JSON object")?
-            .unwrap_or_default();
-
+        let (sampling_overrides, default_chat_template_kwargs) = model_options(&self.model)?;
         let worker_auth = self
             .server
             .worker_api_key
@@ -677,6 +548,7 @@ impl Cli {
             .transpose()?;
         let worker_management_auth = self
             .server
+            .routing
             .worker_management_api_key
             .as_deref()
             .map(|key| bearer(key, "--worker-management-api-key"))
@@ -729,11 +601,11 @@ impl Cli {
             proxy: ProxyConfig {
                 request_timeout_secs: self.server.request_timeout_secs,
                 stream_idle_timeout_secs: self.server.stream_idle_timeout_secs,
-                max_attempts: self.server.retry_max_attempts,
-                initial_backoff_ms: self.server.retry_initial_backoff_ms,
-                max_backoff_ms: self.server.retry_max_backoff_ms,
-                decode_dispatch_limit: self.server.decode_dispatch_limit,
-                stream_after_prefill: self.server.pd_stream_after_prefill,
+                max_attempts: self.server.routing.retry_max_attempts,
+                initial_backoff_ms: self.server.routing.retry_initial_backoff_ms,
+                max_backoff_ms: self.server.routing.retry_max_backoff_ms,
+                decode_dispatch_limit: self.server.routing.decode_dispatch_limit,
+                stream_after_prefill: self.server.routing.pd_stream_after_prefill,
             },
             router_inflight_load: InflightLoadConfig {
                 stale_request_timeout_secs: self.server.stale_request_timeout_secs,
@@ -1254,14 +1126,6 @@ fn load_bucket_config<T: serde::de::DeserializeOwned>(path: &str) -> Result<T> {
 
 fn join_selector(terms: &[String]) -> Option<String> {
     (!terms.is_empty()).then(|| terms.join(","))
-}
-
-/// `Bearer <key>`, marked sensitive so it stays out of `Debug` output.
-fn bearer(key: &str, option: &str) -> Result<HeaderValue> {
-    let mut value = HeaderValue::from_str(&format!("Bearer {key}"))
-        .with_context(|| format!("{option} is not a valid HTTP header value"))?;
-    value.set_sensitive(true);
-    Ok(value)
 }
 
 #[cfg(test)]

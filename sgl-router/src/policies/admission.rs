@@ -19,7 +19,7 @@
 
 use crate::policies::power_of_two::select_k_with_snapshot;
 use crate::policies::{CacheCandidate, CacheCandidateProposal, GuardHints, SelectionProposal};
-pub(crate) use crate::state::load_monitor::engine_ranking::{
+pub(crate) use crate::routing::engine_ranking::{
     compare_decode_engines, compare_prefill_engines, CandidateLoads,
 };
 use crate::state::load_monitor::engine_reported_load::{

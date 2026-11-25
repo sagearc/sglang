@@ -19,8 +19,9 @@ use sgl_router::policies::factory::build_registry;
 use sgl_router::policies::PolicyRegistry;
 use sgl_router::policies_reorg::factory::build_resolver;
 use sgl_router::proxy::Proxy;
+use sgl_router::routing::ChatRouting;
 use sgl_router::server::app::build_router;
-use sgl_router::server::app_context::{AppContext, ChatRouting};
+use sgl_router::server::app_context::AppContext;
 use sgl_router::state::kv_events::{
     BlockSizeOracle, HashTree, KvEventIndex, RadixTreePrefixProvider,
 };

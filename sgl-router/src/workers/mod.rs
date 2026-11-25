@@ -2,13 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod control;
-pub mod decode_gate;
 pub mod introspect;
-pub mod manager;
 pub mod registry;
 pub mod worker;
 
-pub use decode_gate::{DecodeGate, DecodeSlot};
 pub use introspect::{ServerInfo, WorkerIntrospector};
 pub use registry::WorkerRegistry;
 pub use worker::WireProtocol;

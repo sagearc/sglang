@@ -595,7 +595,7 @@ async fn version_groups_constrain_pairing_and_readiness_on_both_paths() {
                     None,
                 )
                 .unwrap();
-                mutable.routing.chat_routing = sgl_router::server::app_context::ChatRouting::Reorg(
+                mutable.routing.chat_routing = sgl_router::routing::ChatRouting::Reorg(
                     [(ModelId("tiny".into()), resolver)].into(),
                 );
             }

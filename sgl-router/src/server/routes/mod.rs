@@ -12,4 +12,3 @@ pub mod responses;
 pub mod tokenize;
 pub mod unsupported;
 pub mod worker_info;
-pub mod workers;

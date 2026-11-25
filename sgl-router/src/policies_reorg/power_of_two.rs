@@ -7,7 +7,7 @@ use std::time::Instant;
 use futures::future::BoxFuture;
 use rand::Rng;
 
-use crate::state::load_monitor::engine_ranking::{compare_decode_engines, compare_prefill_engines};
+use crate::routing::engine_ranking::{compare_decode_engines, compare_prefill_engines};
 use crate::state::load_monitor::engine_reported_load::EngineReportedLoadTable;
 use crate::workers::Worker;
 

@@ -6,10 +6,11 @@ use clap::Parser;
 use serde_json::{json, Value};
 use sgl_router::config::Cli;
 use sgl_router::discovery::{DiscoveryEvent, ModelId, WorkerId, WorkerMode, WorkerSpec};
+use sgl_router::routing::manager;
 use sgl_router::workers::control::{
     ExternalWorkerSource, OperationState, WorkerControlService, WorkerInput,
 };
-use sgl_router::workers::{manager, WireProtocol, WorkerRegistry};
+use sgl_router::workers::{WireProtocol, WorkerRegistry};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};

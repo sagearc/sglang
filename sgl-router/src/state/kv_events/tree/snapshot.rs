@@ -80,7 +80,7 @@ impl SnapshotNode {
 
     /// The tiers carrier `k` restores onto. Absent `tiers` reads as device;
     /// otherwise [`Tiers::from_bits`]. Empty means the carrier is skipped.
-    pub(in crate::state::kv_events) fn carrier_tiers(&self, k: usize) -> Tiers {
+    pub(in crate::routing::kv_events) fn carrier_tiers(&self, k: usize) -> Tiers {
         match self.tiers.get(k) {
             Some(&bits) => Tiers::from_bits(bits),
             None => Tiers::DEVICE,
@@ -96,7 +96,7 @@ impl SnapshotNode {
     /// reading it: `parent` is a backward reference (strictly less than
     /// `index`, the record's own position), and `tiers` is either empty or
     /// paired one-to-one with `workers`.
-    pub(in crate::state::kv_events) fn check_shape(
+    pub(in crate::routing::kv_events) fn check_shape(
         &self,
         index: usize,
     ) -> Result<(), ShapeViolation> {
@@ -112,7 +112,7 @@ impl SnapshotNode {
 
 /// Which rule of [`SnapshotNode::check_shape`] a record broke.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::state::kv_events) enum ShapeViolation {
+pub(in crate::routing::kv_events) enum ShapeViolation {
     /// `parent` pointed at the record itself or at a later one.
     NonBackwardParent { parent: u32 },
     /// `tiers` was neither empty nor the same length as `workers`.
@@ -332,7 +332,7 @@ impl HashTree {
     /// the other writer (`KvEventIndex::remove_worker`, off the discovery
     /// task) cannot prune a parent that an earlier chunk placed and a later
     /// chunk is about to hang a child from.
-    pub(in crate::state::kv_events) fn restore_snapshot(
+    pub(in crate::routing::kv_events) fn restore_snapshot(
         &self,
         worker_table: &[KvWorkerId],
         nodes: &[SnapshotNode],

@@ -3,7 +3,7 @@
 
 //! Stage-specific engine ranking over one captured load snapshot.
 
-use super::engine_reported_load::{
+use crate::state::load_monitor::engine_reported_load::{
     EngineReportedLoadSnapshot, EngineReportedSchedulingLoad, EngineReportedWorkerLoad,
 };
 use crate::workers::Worker;

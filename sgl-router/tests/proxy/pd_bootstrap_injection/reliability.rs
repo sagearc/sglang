@@ -5,7 +5,7 @@ use super::*;
 use crate::common::mock_worker::MockWorker;
 use futures::StreamExt;
 use http_body_util::BodyExt;
-use sgl_router::server::app_context::ChatRouting;
+use sgl_router::routing::ChatRouting;
 
 fn pd_ctx(prefill: &str, decode: &str, reorg: bool) -> Arc<AppContext> {
     let spec = |id: &str, url: &str, mode| WorkerSpec {

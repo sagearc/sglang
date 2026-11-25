@@ -16,8 +16,9 @@ use sgl_router::config::{
 use sgl_router::discovery::{ModelId, WorkerId, WorkerMode, WorkerSpec};
 use sgl_router::policies::factory::build_registry_with_defaults;
 use sgl_router::proxy::Proxy;
+use sgl_router::routing::ChatRouting;
 use sgl_router::server::app::build_router;
-use sgl_router::server::app_context::{AppContext, ChatRouting};
+use sgl_router::server::app_context::AppContext;
 use sgl_router::state::load_monitor::router_inflight_load::{
     RouterInflightLoadRegistry, SystemTimeClock,
 };

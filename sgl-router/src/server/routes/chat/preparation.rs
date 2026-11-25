@@ -195,17 +195,17 @@ impl Preprocessor {
 /// SGLang upstream's coarse bytes-per-token estimate; only relative load ordering matters.
 const BYTES_PER_TOKEN_ESTIMATE: usize = 4;
 
-pub(super) const CHAT_PATH: &str = "/v1/chat/completions";
-pub(super) const COMPLETIONS_PATH: &str = "/v1/completions";
-pub(super) const GENERATE_PATH: &str = "/generate";
-pub(super) const EMBEDDINGS_PATH: &str = "/v1/embeddings";
-pub(super) const CLASSIFY_PATH: &str = "/v1/classify";
-pub(super) const RERANK_PATH: &str = "/v1/rerank";
+pub(crate) const CHAT_PATH: &str = "/v1/chat/completions";
+pub(crate) const COMPLETIONS_PATH: &str = "/v1/completions";
+pub(crate) const GENERATE_PATH: &str = "/generate";
+pub(crate) const EMBEDDINGS_PATH: &str = "/v1/embeddings";
+pub(crate) const CLASSIFY_PATH: &str = "/v1/classify";
+pub(crate) const RERANK_PATH: &str = "/v1/rerank";
 
 /// The engine's KV namespace for a request on `path`, from the fields SGLang
 /// reads there: `model: "base:adapter"` (OpenAI routes) wins over `lora_path`,
 /// and only generation honors `cache_salt`.
-pub(super) fn cache_namespace(path: &str, body: &Value) -> CacheNamespace {
+pub(crate) fn cache_namespace(path: &str, body: &Value) -> CacheNamespace {
     let openai = matches!(path, CHAT_PATH | COMPLETIONS_PATH | EMBEDDINGS_PATH);
     let generates = matches!(path, CHAT_PATH | COMPLETIONS_PATH | GENERATE_PATH);
     let model_adapter = body["model"]
@@ -256,7 +256,7 @@ pub(crate) struct PreparedRequest {
     /// Engine endpoint the request is forwarded to.
     pub(crate) path: &'static str,
     pub(crate) model: ModelId,
-    pub(super) streaming: bool,
+    pub(crate) streaming: bool,
     /// Output budget, for decode KV; unknown if any prompt leaves it unset.
     pub(crate) output_tokens: Option<u64>,
     pub(crate) body: Bytes,
@@ -273,7 +273,7 @@ pub(crate) struct PreparedRequest {
     pub(crate) fans_out: bool,
     /// Media items of chat `messages`, `/generate` or typed `Generate` media
     /// fields, or multimodal embeddings and rerank inputs, for the access log.
-    pub(super) media: MediaCounts,
+    pub(crate) media: MediaCounts,
     /// Whether chat forwards `tokens` as `input_ids`; `None` for `/generate`,
     /// embeddings, classify and rerank, which prepare their own body.
     input_ids_forwarding: Option<InputIdsForwarding>,
@@ -293,7 +293,7 @@ impl Preprocessor {
     /// OpenAI chat and completions go to the engine's `/generate` when SGLang's
     /// OpenAI layer is reproduced for them, else to its own route as sent.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn openai(
+    pub(crate) fn openai(
         &self,
         openai_settings: Option<&OpenAiSettings>,
         path: &'static str,
@@ -393,7 +393,7 @@ impl Preprocessor {
 
     /// The engine's `GenerateReqInput`. With a tokenizer loaded, `text` becomes
     /// `input_ids` here, so the engine skips tokenizing and routing sees its tokens.
-    pub(super) fn generate(
+    pub(crate) fn generate(
         &self,
         model: ModelId,
         body: Bytes,
@@ -491,7 +491,7 @@ impl Preprocessor {
 
     /// The engine's OpenAI `EmbeddingRequest` or its `ClassifyRequest`, whose text
     /// `input` is forwarded as token IDs, as `/generate` forwards `text`.
-    pub(super) fn embeddings(
+    pub(crate) fn embeddings(
         &self,
         path: &'static str,
         model: ModelId,
@@ -539,7 +539,7 @@ impl Preprocessor {
 impl PreparedRequest {
     /// SGLang's `V1RerankReqInput`, forwarded as sent: the engine renders and
     /// tokenizes each query-document pair as its own prompt.
-    pub(super) fn rerank(model: ModelId, body: Bytes) -> Result<Self, ApiError> {
+    pub(crate) fn rerank(model: ModelId, body: Bytes) -> Result<Self, ApiError> {
         let value = Value::Object(serde_json::from_slice(&body).map_err(|_| invalid_request())?);
         // Qwen rerankers include the instruction in every query-document prompt.
         let shared = text_len(&value["instruct"]) + text_len(&value["query"]);
@@ -656,12 +656,6 @@ impl PreparedRequest {
         }
     }
 
-    /// Whether the engine endpoint honors a routed DP rank; embeddings, classify
-    /// and rerank take none.
-    pub(crate) fn accepts_dp_rank(&self) -> bool {
-        !matches!(self.path, EMBEDDINGS_PATH | CLASSIFY_PATH | RERANK_PATH)
-    }
-
     pub(crate) fn engine_rid(&self) -> Option<String> {
         // Caller IDs are unsafe for prefix aborts; fan-out regenerates IDs.
         // PD shares the minted ID, but only decode arms abort-on-drop.
@@ -753,7 +747,7 @@ fn parallel_samples(value: &Value) -> u64 {
 }
 
 /// An embeddings body and the model it names; chat completions also require one.
-pub(super) fn parse_embedding_request(body: &Bytes) -> Result<(ModelId, Value), ApiError> {
+pub(crate) fn parse_embedding_request(body: &Bytes) -> Result<(ModelId, Value), ApiError> {
     let value = Value::Object(serde_json::from_slice(body).map_err(|_| invalid_request())?);
     let model = Option::<String>::deserialize(&value["model"])
         .map_err(|_| invalid_request())?
@@ -796,9 +790,9 @@ fn caller_token_rows(input: &Value) -> Option<Vec<Vec<u32>>> {
 
 /// Routing and sampling fields retained by the lightweight request parser.
 #[derive(Debug, Default)]
-pub(super) struct RoutingFields {
+pub(crate) struct RoutingFields {
     stream: Option<bool>,
-    pub(super) model: Option<String>,
+    pub(crate) model: Option<String>,
     max_tokens: Option<u64>,
     max_completion_tokens: Option<u64>,
     sampling: [SamplingValue; SamplingField::ALL.len()],
@@ -1136,17 +1130,6 @@ fn input_token_count(tokens: Option<&RequestTokens>, body: &Bytes) -> usize {
 fn estimate_prefill_tokens(bytes: usize) -> usize {
     // Never 0: a zero-load entry is invisible to the cache-aware imbalance fast path.
     (bytes / BYTES_PER_TOKEN_ESTIMATE).max(1)
-}
-
-/// The engine stores bootstrap rooms as signed int64 values.
-pub(crate) fn generate_room_id() -> u64 {
-    rand::random::<u64>() & (i64::MAX as u64)
-}
-
-/// A room with `room % dp_ranks == rank`, which is how decode finds the prefill rank.
-pub(crate) fn generate_room_id_for_rank(rank: u32, dp_ranks: u32) -> u64 {
-    let dp_ranks = u64::from(dp_ranks);
-    (generate_room_id() >> 1) / dp_ranks * dp_ranks + u64::from(rank)
 }
 
 /// Append JSON-encoded `fields` before the closing brace, so they win over
@@ -1712,7 +1695,7 @@ fn sampling_violation(spec: &ParamSpec, provided: SamplingValue) -> Option<Strin
     }
 }
 
-pub(super) fn parse_routing_fields(body: &Bytes) -> Result<RoutingFields, ApiError> {
+pub(crate) fn parse_routing_fields(body: &Bytes) -> Result<RoutingFields, ApiError> {
     let err = match serde_json::from_slice::<RoutingFields>(body) {
         Ok(fields) => return Ok(fields),
         Err(e) => e,
@@ -1843,14 +1826,6 @@ mod tests {
     fn requested_token_metadata_requires_tokenization() {
         assert!(should_tokenize_request(false, true));
         assert!(!should_tokenize_request(false, false));
-    }
-
-    #[test]
-    fn rank_aligned_room_ids_map_back_to_their_rank() {
-        for _ in 0..1_000 {
-            let room = generate_room_id_for_rank(6, 7);
-            assert!(room <= i64::MAX as u64 && room % 7 == 6);
-        }
     }
 
     /// The stub context with the tiny tokenizer, whose post-processor prepends BOS (id 256).
@@ -2084,17 +2059,6 @@ mod tests {
         assert_eq!(image.tokens.unwrap().ids, ids);
         let images = prepare_generate(json!({"text": ["hi", "hi"], "image_data": ["a", "b"]}));
         assert_eq!(images.input_token_count, 2 * ids.len());
-    }
-
-    #[test]
-    fn generate_room_id_stays_in_63_bit_range() {
-        for _ in 0..10_000 {
-            let r = generate_room_id();
-            assert!(
-                r <= i64::MAX as u64,
-                "generate_room_id() returned {r} > i64::MAX; would wrap negative as torch.int64",
-            );
-        }
     }
 
     #[test]

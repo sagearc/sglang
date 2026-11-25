@@ -38,9 +38,8 @@ pub async fn readyz(State(ctx): State<Arc<AppContext>>) -> StatusCode {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    use crate::state::kv_events::BootstrapTracker;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
@@ -113,113 +112,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
     }
 
-    #[tokio::test]
-    async fn readiness_requires_resolved_model_and_both_pd_roles() {
-        use crate::discovery::{WorkerId, WorkerMode, WorkerSpec};
-
-        use WorkerMode::{Decode, Plain, Prefill};
-
-        for (model, modes, ready) in [
-            (None, vec![Plain], false),
-            (Some("other"), vec![Plain], false),
-            (Some("stub-model"), vec![Prefill], false),
-            (Some("stub-model"), vec![Decode], false),
-            (Some("stub-model"), vec![Prefill, Decode], true),
-        ] {
-            let ctx = test_ctx(true, false);
-            for (i, mode) in modes.into_iter().enumerate() {
-                ctx.routing
-                    .registry
-                    .add(WorkerSpec {
-                        id: WorkerId(i.to_string()),
-                        url: format!("http://worker-{i}:30000"),
-                        mode,
-                        model_ids: model.map(|m| ModelId(m.into())).into_iter().collect(),
-                        bootstrap_port: (mode == Prefill).then_some(8997),
-                        ..Default::default()
-                    })
-                    .unwrap();
-            }
-            assert_eq!(readyz(State(ctx)).await == StatusCode::OK, ready);
-        }
-    }
-
-    #[tokio::test]
-    async fn readiness_rejects_portless_prefill() {
-        use crate::discovery::{ModelId, WorkerId, WorkerMode, WorkerSpec};
-        let ctx = test_ctx(true, false);
-        for mode in [WorkerMode::Prefill, WorkerMode::Decode] {
-            ctx.routing
-                .registry
-                .add(WorkerSpec {
-                    id: WorkerId(format!("{mode:?}")),
-                    url: format!("http://{mode:?}:30000"),
-                    mode,
-                    model_ids: vec![ModelId(ctx.config.model.id.clone())],
-                    ..Default::default()
-                })
-                .unwrap();
-        }
-        assert_eq!(readyz(State(ctx)).await, StatusCode::SERVICE_UNAVAILABLE);
-    }
-
-    async fn readyz_status(ctx: Arc<AppContext>) -> StatusCode {
-        crate::server::app::build_router(ctx)
-            .oneshot(
-                Request::builder()
-                    .uri("/readyz")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap()
-            .status()
-    }
-
-    /// A ready context with one worker whose KV index uses `tracker`.
-    fn ctx_with_tracker(tracker: Arc<BootstrapTracker>) -> Arc<AppContext> {
-        use crate::state::kv_events::{BlockSizeOracle, KvEventIndex};
-        let mut ctx = AppContext::stub();
-        ctx.mark_ready();
-        add_test_worker(&ctx);
-        ctx.routing.kv_index = KvEventIndex::new_with_bootstrap(
-            reqwest::Client::new(),
-            BlockSizeOracle::new(),
-            tracker,
-        )
-        .snapshot_source();
-        Arc::new(ctx)
-    }
-
-    /// A context whose seed gate is the ONLY thing that can hold `/readyz`
-    /// down: the rank is terminal, so condition 3 is satisfied and a 503 cannot
-    /// come from it.
-    fn ctx_with_seed_gate(seed_required: bool, failed: bool) -> Arc<AppContext> {
-        use crate::state::kv_events::bootstrap::SweepOutcome;
-        use crate::state::kv_events::{BootstrapState, KvWorkerId};
-
-        let tracker = Arc::new(BootstrapTracker::new_with_opts(
-            std::time::Duration::from_secs(300),
-            std::time::Duration::from_secs(120),
-            seed_required,
-        ));
-        let rank = KvWorkerId::new("http://w1:30000".into(), 0);
-        tracker.register(std::slice::from_ref(&rank));
-        tracker.set(&rank, BootstrapState::Failed);
-        assert!(tracker.settled(), "condition 3 must not be what gates here");
-        // The verdict that terminated the rank. Failed: nine siblings were
-        // there and none gave up its tree, the shape a first-wave surge pod
-        // hits on a rolling update. Otherwise: they proved they hold nothing.
-        let verdict = if failed {
-            SweepOutcome::TimedOut
-        } else {
-            SweepOutcome::FleetCold
-        };
-        tracker.record_sweep_result(verdict, 9);
-        ctx_with_tracker(tracker)
-    }
-
-    fn add_test_worker(ctx: &AppContext) {
+    pub(crate) fn add_test_worker(ctx: &AppContext) {
         use crate::discovery::{ModelId, WorkerId, WorkerMode, WorkerSpec};
         ctx.routing
             .registry
@@ -233,69 +126,7 @@ mod tests {
             .expect("test worker accepted");
     }
 
-    /// The gate's reason for existing: a replica that could not pull the
-    /// fleet's tree must stay OUT of the Service, so a rolling update stalls
-    /// with the previous generation serving instead of completing with
-    /// cache-blind replicas.
-    #[tokio::test]
-    async fn readyz_503_when_a_required_seed_failed() {
-        assert_eq!(
-            readyz_status(ctx_with_seed_gate(true, true)).await,
-            StatusCode::SERVICE_UNAVAILABLE,
-        );
-    }
-
-    /// Same failed sweep, gate not opted in: today's behaviour is preserved
-    /// exactly, so enabling the flag is the only thing that can change a
-    /// fleet's rollout semantics.
-    #[tokio::test]
-    async fn readyz_200_on_the_same_failure_when_the_gate_is_off() {
-        assert_eq!(
-            readyz_status(ctx_with_seed_gate(false, true)).await,
-            StatusCode::OK,
-        );
-    }
-
-    /// Answering 200 once latches the gate: a sweep started by a
-    /// late-discovered worker must not pull a serving replica back out of the
-    /// Service; an unready replica also leaves its own EndpointSlice, so its
-    /// siblings lose a bootstrap source too.
-    #[tokio::test]
-    async fn readyz_stays_200_after_a_later_sweep_fails() {
-        use crate::state::kv_events::bootstrap::SweepOutcome;
-        let ctx = ctx_with_seed_gate(true, false);
-        assert_eq!(readyz_status(Arc::clone(&ctx)).await, StatusCode::OK);
-
-        ctx.routing
-            .kv_index
-            .as_ref()
-            .expect("index attached")
-            .bootstrap()
-            .record_sweep_result(SweepOutcome::TimedOut, 9);
-        assert_eq!(
-            readyz_status(ctx).await,
-            StatusCode::OK,
-            "an already-serving replica may not be un-readied",
-        );
-    }
-
-    /// Condition 3 on its own: a rank still mid-bootstrap holds readiness down
-    /// whether or not the seed gate is configured.
-    #[tokio::test]
-    async fn readyz_503_while_a_rank_is_still_bootstrapping() {
-        use crate::state::kv_events::KvWorkerId;
-
-        let tracker = Arc::new(BootstrapTracker::new(std::time::Duration::from_secs(300)));
-        tracker.register(&[KvWorkerId::new("http://w1:30000".into(), 0)]);
-        assert!(!tracker.settled());
-
-        assert_eq!(
-            readyz_status(ctx_with_tracker(tracker)).await,
-            StatusCode::SERVICE_UNAVAILABLE,
-        );
-    }
-
-    fn test_ctx(ready: bool, with_worker: bool) -> Arc<AppContext> {
+    pub(crate) fn test_ctx(ready: bool, with_worker: bool) -> Arc<AppContext> {
         let ctx = AppContext::stub();
         if ready {
             ctx.mark_ready();

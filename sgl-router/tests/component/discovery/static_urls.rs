@@ -94,7 +94,8 @@ async fn static_urls_pd_role_resolved_end_to_end() {
         ServerConfig,
     };
     use sgl_router::discovery::{spawn_discovery, WorkerId};
-    use sgl_router::workers::{manager, WorkerRegistry};
+    use sgl_router::routing::manager;
+    use sgl_router::workers::WorkerRegistry;
     use tokio::net::TcpListener;
     use tokio::sync::oneshot;
 

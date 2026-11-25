@@ -21,7 +21,9 @@ use selection::pool_error;
 use std::{collections::HashMap, sync::Arc};
 
 pub(crate) mod dispatch;
+mod kv_metrics;
 pub(crate) mod selection;
+mod snapshot;
 mod startup;
 pub use startup::{start, WorkerTasks};
 
@@ -216,7 +218,7 @@ impl RoutingState {
 pub(crate) fn register_routes(
     router: axum::Router<Arc<AppContext>>,
 ) -> axum::Router<Arc<AppContext>> {
-    use crate::server::routes::{cache, workers};
+    use crate::server::routes::workers;
     use axum::routing::get;
     router
         .route(
@@ -231,6 +233,6 @@ pub(crate) fn register_routes(
         )
         .route(
             crate::state::kv_events::bootstrap::SNAPSHOT_PATH,
-            get(cache::kv_snapshot),
+            get(snapshot::kv_snapshot),
         )
 }

@@ -5,17 +5,16 @@
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub mod buckets_reorg;
 pub mod config;
-pub mod discovery;
 pub mod health;
 pub(crate) mod off_worker;
-pub mod policies;
-pub mod policies_reorg;
 pub(crate) mod protocol;
 pub mod proxy;
-pub mod routing;
 pub mod server;
 pub mod state;
 pub mod tokenizer;
 pub mod workers;
+
+pub mod discovery;
+pub mod routing;
+pub use routing::{buckets_reorg, policies, policies_reorg};

@@ -906,8 +906,8 @@ mod tests {
     /// test.
     #[tokio::test]
     async fn k8s_pd_pipeline_registers_workers_with_per_pod_bootstrap_port() {
+        use crate::routing::manager::run_with_introspector;
         use crate::workers::introspect::WorkerIntrospector;
-        use crate::workers::manager::run_with_introspector;
         use crate::workers::WorkerRegistry;
         use axum::{routing::get, Json, Router};
         use serde_json::{json, Value};
@@ -1318,8 +1318,8 @@ mod tests {
     #[tokio::test]
     async fn k8s_reconcile_recovers_worker_whose_server_info_was_initially_failing() {
         use crate::discovery::ModelId;
+        use crate::routing::manager::run_with_introspector_and_reconcile;
         use crate::workers::introspect::WorkerIntrospector;
-        use crate::workers::manager::run_with_introspector_and_reconcile;
         use crate::workers::WorkerRegistry;
         use axum::http::StatusCode;
         use axum::response::IntoResponse;

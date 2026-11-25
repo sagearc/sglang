@@ -26,7 +26,6 @@ use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::routing::dispatch::dispatch;
-use crate::routing::dispatch::SelectedWorkers;
 
 // Expose the selected decode worker to both PD workers and the client.
 pub(crate) const X_SGL_DECODE_URL: HeaderName = HeaderName::from_static("x-sgl-decode-url");
@@ -136,6 +135,89 @@ pub(super) async fn forward_request_grpc(
         failed = Some(result);
     }
     failed.expect("at least one attempt")
+}
+
+/// A plain worker, or a prefill worker paired with a decode worker for PD.
+pub(crate) struct SelectedWorkers {
+    pub(crate) prefill: Arc<Worker>,
+    pub(crate) decode: Option<Arc<Worker>>,
+    pub(crate) track_dispatch_timestamps: bool,
+}
+
+/// Dispatch to one plain worker through the same HTTP or gRPC transport in either build.
+pub(crate) async fn dispatch_plain<T: Transport>(
+    transport: T,
+    ctx: &AppContext,
+    request: &mut PreparedRequest,
+    workers: SelectedWorkers,
+    mut headers: HeaderMap,
+    request_started_at: Instant,
+    duration: &Arc<RequestDurationGuard>,
+) -> Result<Dispatched<T::Response>, ApiError> {
+    debug_assert!(workers.decode.is_none());
+    let worker = workers.prefill;
+    headers.remove(X_DATA_PARALLEL_RANK);
+    let worker_load = if workers.track_dispatch_timestamps {
+        worker.timestamped_load_guard()
+    } else {
+        worker.load_guard()
+    };
+    let active = ctx.router_inflight_load.register_aged(
+        worker.id.clone(),
+        worker.url.clone(),
+        request.input_token_count,
+        0,
+        request_started_at.elapsed(),
+    );
+    let metrics = DispatchMetrics::new(ctx, request, &worker, request_started_at, duration);
+    let engine_rid = request.engine_rid();
+    let leg = Leg {
+        headers,
+        body: request.outgoing_body(&ctx.metrics, None, engine_rid.as_deref())?,
+        additions: Additions {
+            rid: engine_rid.clone(),
+            bootstrap: None,
+            sampling_defaults: request.sampling_defaults(),
+            routed_dp_rank: None,
+            disagg_prefill_dp_rank: None,
+        },
+    };
+    let expiration = active.cancel_token().clone();
+    let pending = transport.send(
+        ctx,
+        &worker,
+        request.path,
+        leg,
+        engine_rid.as_deref(),
+        (worker_load, active, None),
+        &metrics,
+        expiration.clone(),
+        CancellationToken::new(),
+        metrics.streaming.then(|| metrics.first_byte_callback()),
+    );
+    let (result, _, _) = response_before_expiry(&metrics.model, expiration, async {
+        (pending.await, None, None)
+    })
+    .await;
+    let retry_excluding = if matches!(
+        dispatch_outcome::<T>(&result),
+        RequestOutcome::Error | RequestOutcome::Backpressure
+    ) {
+        vec![worker.id.clone()]
+    } else {
+        Vec::new()
+    };
+    let result = match result {
+        Ok(response) => Ok(T::respond(request, response, metrics.streaming).await),
+        Err(error) => Err(error),
+    };
+    let log_context = metrics.record_dispatch_result::<T>(&result, engine_rid, None);
+    Ok(Dispatched {
+        result,
+        log_context,
+        decode_url_header: None,
+        retry_excluding,
+    })
 }
 
 pub(crate) struct Dispatched<R> {

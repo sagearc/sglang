@@ -4,7 +4,8 @@
 use super::ChatRouting;
 use crate::buckets_reorg::BucketResolver;
 use crate::config::{SessionAffinityMode, DEFAULT_MIN_LOAD_CHOICES};
-use crate::discovery::{ModelId, WorkerId, WorkerMode};
+use crate::discovery::ModelId;
+use crate::discovery::{WorkerId, WorkerMode};
 use crate::policies::registry::{PdPoolResolver, PdResolveError};
 use crate::policies::selection::{
     select_decode_peer, select_prefill_worker, DecodeSelectionInputs, PrefillSelectionInputs,
@@ -42,13 +43,13 @@ impl<'a> ModelRouting<'a> {
     }
 
     pub(crate) fn needs_request_tokens(&self, ctx: &AppContext) -> bool {
-        let policy_needs_tokens = match self {
-            Self::Legacy(policy) => policy.needs_request_tokens() || ctx.config.model.dp_aware,
-            // The same predicate gates `--no-tokenizer` at startup,
-            // so a load-only bucket skips the body parse.
-            Self::Reorg(resolver) => resolver.needs_request_tokens(),
-        };
-        policy_needs_tokens || ctx.routing.bucket_selector.is_enabled()
+        ctx.routing.bucket_selector.is_enabled()
+            || match self {
+                Self::Legacy(policy) => policy.needs_request_tokens() || ctx.config.model.dp_aware,
+                // The same predicate gates `--no-tokenizer` at startup,
+                // so a load-only bucket skips the body parse.
+                Self::Reorg(resolver) => resolver.needs_request_tokens(),
+            }
     }
 
     /// Pick a plain worker, or a prefill worker followed by a decode peer in PD mode,

@@ -416,10 +416,10 @@ pub struct ModelConfig {
     /// Optional static bucket configuration. `None` uses the global domain.
     pub bucket_config: Option<BucketConfig>,
     /// Reorg `--bucket-config`; `None` builds the default plain and P/D buckets.
-    pub reorg_buckets: Option<crate::policies_reorg::factory::BucketsConfig>,
+    pub reorg_buckets: Option<super::BucketsConfig>,
     /// Reorg admission for groups that leave a limit unset: `--max-inflight-requests`
     /// and `--max-kv-usage`.
-    pub reorg_admission: crate::policies_reorg::admission::AdmissionLimits,
+    pub reorg_admission: super::AdmissionLimits,
     /// Per-worker circuit breaker; `None` under `--disable-circuit-breaker`.
     pub circuit_breaker: Option<CircuitBreakerConfig>,
     /// Cache-Aware prefix configuration.

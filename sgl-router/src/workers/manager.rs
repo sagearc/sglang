@@ -10,9 +10,10 @@ use crate::workers::control::{
     worker_urls_equal, WorkerControlAction, WorkerControlCommand, WorkerControlService,
 };
 use crate::workers::introspect::{
-    worker_client, DisaggregationRole, WorkerIntrospector, SERVER_INFO_TIMEOUT,
+    dials_cleartext, resolve_protocol, worker_client, DisaggregationRole, WorkerIntrospector,
+    SERVER_INFO_TIMEOUT,
 };
-use crate::workers::{EngineProfile, WireProtocol, Worker, WorkerRegistry};
+use crate::workers::{Worker, WorkerRegistry};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -55,59 +56,6 @@ fn cb_config_for_spec(spec: &WorkerSpec, cfg: &Config) -> Option<CircuitBreakerC
         });
     }
     Some(CircuitBreakerConfig::default())
-}
-
-/// Whether `worker_url` is one the router will dial in cleartext.
-///
-/// The scheme test cannot be `Url::parse(worker_url)?.scheme() == "http"`: a
-/// schemeless `worker-0.engines.svc:8000` parses with `worker-0.engines.svc`
-/// as the *scheme*, so that test answers "not cleartext" for a shape that is
-/// nothing of the sort. Normalize the way `parse_bootstrap_host` does — retry
-/// under an explicit `http://` — and read the scheme off that.
-///
-/// A schemeless URL therefore reads as cleartext here. That answer never
-/// reaches the wire: `proxy::parse_worker_url` is a bare `Url::parse`, which
-/// *accepts* `worker-0.engines.svc:8000` (scheme `worker-0.engines.svc`,
-/// opaque path `8000`), and the request then dies at `worker_url.join(path)`
-/// with `RelativeUrlWithCannotBeABaseBase` before any client is used. So
-/// `Some(true)` costs nothing today and stays correct if that path ever grows
-/// the same normalization; answering `None` would only mislabel the reason in
-/// the log.
-fn dials_cleartext(worker_url: &str) -> Option<bool> {
-    if worker_url.contains("://") {
-        return url::Url::parse(worker_url)
-            .ok()
-            .map(|u| u.scheme() == "http");
-    }
-    url::Url::parse(&format!("http://{worker_url}"))
-        .ok()
-        .map(|_| true)
-}
-
-/// Resolve the wire protocol for a worker from its `/server_info`
-/// (`enable_http2`) and whether the router dials it in cleartext
-/// (`dials_cleartext`, `None` when the URL did not parse).
-///
-/// Both inputs are fixed for the worker's lifetime, so this runs once per
-/// worker, before it is registered.
-///
-/// Upgrades to [`WireProtocol::H2c`] only when the engine self-reports
-/// `--enable-http2` **and** the worker URL is cleartext. h2c is HTTP/2 with
-/// prior knowledge — no negotiation — so sending it anywhere that is not
-/// known to serve it fails every request; the cleartext gate is what bounds
-/// that risk.
-///
-/// [`WireProtocol::Http1`] is the fallback for everything else, and it does
-/// not mean "HTTP/1.1 on the wire". It selects the negotiating client, which
-/// advertises ALPN `h2, http/1.1`, so an `https://` worker running
-/// `--enable-http2` reaches HTTP/2 over TLS on its own — the correct outcome,
-/// arrived at by negotiation rather than by assumption. Only cleartext workers
-/// need prior-knowledge h2c. See [`WireProtocol`].
-fn resolve_protocol(enable_http2: Option<bool>, cleartext: Option<bool>) -> WireProtocol {
-    match (enable_http2, cleartext) {
-        (Some(true), Some(true)) => WireProtocol::H2c,
-        _ => WireProtocol::Http1,
-    }
 }
 
 pub async fn run(rx: mpsc::Receiver<DiscoveryEvent>, registry: Arc<WorkerRegistry>) {
@@ -841,8 +789,8 @@ async fn register_one(
     introspector: Arc<WorkerIntrospector>,
 ) -> Result<(), RegisterWorkerError> {
     let worker_url = spec.url.clone();
-    let info = introspector.fetch(&worker_url).await;
-    if let Some(name) = info.served_model_name {
+    let mut info = introspector.fetch(&worker_url).await;
+    if let Some(name) = info.served_model_name.take() {
         spec.model_ids = vec![ModelId(name)];
     }
     // Trust `/server_info` over the discovery backend when the worker
@@ -916,13 +864,7 @@ async fn register_one(
     let cb = cfg.as_ref().and_then(|c| cb_config_for_spec(&spec, c));
     // The profile rides beside the spec rather than on it: `WorkerSpec` is the
     // serde wire type for `DiscoveryEvent`, and no discovery backend can know it.
-    let profile = EngineProfile {
-        protocol,
-        dp_ranks: info.dp_ranks,
-        openai: info.openai.map(Arc::new),
-        grpc_port: info.grpc_port,
-        supports_inline_system: info.supports_inline_system,
-    };
+    let profile = info.take_engine_profile(protocol);
     if let Err(e) = registry.add_with_cb(spec, cb, profile) {
         // Mixed PD + plain on the same model is rejected at registration
         // time. Log loudly so the operator notices the conflicting
@@ -995,6 +937,7 @@ mod tests {
         PolicyKind, ProxyConfig, ServerConfig, StaticUrlsDiscoveryConfig,
     };
     use crate::discovery::{WorkerId, WorkerMode};
+    use crate::workers::WireProtocol;
     use axum::{routing::get, Json, Router};
     use serde_json::{json, Value};
     use std::num::NonZeroU32;

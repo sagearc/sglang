@@ -6,7 +6,7 @@ use sgl_kv_indexer::{GrpcPrefixIndex, PrefixIndex, PrefixIndexConfig};
 use std::{sync::Arc, time::Duration};
 use tokio::task::JoinHandle;
 
-use super::ChatRouting;
+use super::{manager, ChatRouting};
 use crate::{
     config::{
         CachePrefixProvider, ChatRoutingKind, Config, DiscoveryBackend, KvIndexerEndpointConfig,
@@ -25,7 +25,7 @@ use crate::{
     workers::{
         control::{ExternalWorkerSource, WorkerControlService},
         introspect::worker_client,
-        manager, WorkerRegistry,
+        WorkerRegistry,
     },
 };
 

@@ -32,7 +32,7 @@ const DRAIN_WARN_AFTER: Duration = Duration::from_secs(30);
 async fn main() -> Result<()> {
     // Resolve CLI configuration and set up startup logging.
     let cli = Cli::parse();
-    let routing_config = cli.routing.chat_routing;
+    let routing_config = cli.chat_routing();
     init_tracing(&cli.server.log_level, cli.server.log_format)?;
     #[cfg(feature = "fips")]
     install_fips_crypto_provider()?;
@@ -117,7 +117,7 @@ fn install_fips_crypto_provider() -> Result<()> {
         })?;
     aws_lc_rs::try_fips_mode()
         .map_err(|e| anyhow::anyhow!("aws-lc-rs is not in FIPS mode: {e}"))?;
-    anyhow::ensure!(
+    ensure!(
         rustls::crypto::CryptoProvider::get_default().is_some_and(|provider| provider.fips()),
         "the installed rustls crypto provider is not FIPS-approved"
     );

@@ -5,78 +5,27 @@ use std::collections::HashSet;
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{bail, ensure, Result};
-use serde::Deserialize;
 
-use crate::buckets_reorg::{
-    Bucket, BucketGroups, BucketResolver, EngineGroup, SloPreference, TokenLimits,
-};
+use crate::buckets_reorg::{Bucket, BucketGroups, BucketResolver, EngineGroup, TokenLimits};
 use crate::config::{
-    AffinityConfig, AffinityMode, BalancedBy, DecodePolicyKind, FilterKind, ModelConfig,
-    PolicyKind, SessionAffinityMode,
+    AffinityConfig, AffinityMode, DecodePolicyKind, FilterKind, ModelConfig, PolicyKind,
+    SessionAffinityMode,
 };
-use crate::discovery::WorkerId;
 use crate::state::kv_events::RadixTreePrefixProvider;
 use crate::state::{
     kv_events::KvEventIndex, load_monitor::router_inflight_load::JanitorHandle, AffinityStore,
 };
 
+pub use crate::config::reorg::{AffinitySpec, BucketSpec, BucketsConfig, GroupSpec};
+#[cfg(test)]
+use crate::config::BalancedBy;
+
 use super::{
-    admission::AdmissionLimits,
     cache_aware::{CacheAwarePolicy, CacheSource},
     power_of_two::PowerOfTwoPolicy,
     session_aware::SessionAwarePolicy,
     Policy, Stage,
 };
-
-/// Reorg `--bucket-config`: plain or P/D buckets whose groups each own their
-/// membership, policy and admission.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct BucketsConfig {
-    pub buckets: Vec<BucketSpec>,
-    pub ttft_slo: SloPreference,
-    pub tps_slo: SloPreference,
-}
-
-/// Set either `plain` or both `prefill` and `decode`.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct BucketSpec {
-    pub id: String,
-    pub rank: u32,
-    pub min_input_tokens: Option<u64>,
-    pub max_input_tokens: Option<u64>,
-    pub max_context_tokens: Option<u64>,
-    pub ttft_ms: Option<u64>,
-    pub tokens_per_second: Option<f64>,
-    pub plain: Option<GroupSpec>,
-    pub prefill: Option<GroupSpec>,
-    pub decode: Option<GroupSpec>,
-}
-
-/// Omitted fields mean every engine of the role and `--policy` (power-of-two on
-/// decode); admission limits left unset take `--max-inflight-requests` / `--max-kv-usage`,
-/// and affinity settings left unset take `--affinity-*`.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct GroupSpec {
-    pub worker_ids: Option<HashSet<WorkerId>>,
-    /// Any listed Kubernetes Service, as namespace/name; exclusive with worker_ids.
-    pub worker_services: Option<HashSet<String>>,
-    pub policy: Option<PolicyKind>,
-    pub admission: Option<AdmissionLimits>,
-    pub affinity: Option<AffinitySpec>,
-}
-
-/// Per-group `--affinity-mode`, `--affinity-balanced-by` and `--affinity-load-*`.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct AffinitySpec {
-    pub mode: Option<AffinityMode>,
-    pub balanced_by: Option<BalancedBy>,
-    pub load_factor: Option<f64>,
-    pub load_gap: Option<u64>,
-}
 
 impl AffinitySpec {
     /// Balanced-only fields need balanced `mode`; a set load factor must be at least 1.

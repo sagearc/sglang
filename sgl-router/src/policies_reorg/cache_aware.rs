@@ -14,10 +14,10 @@ use sgl_kv_indexer::{PrefixIndex, PrefixIndexError, PrefixOutcome};
 use tokio::sync::OnceCell;
 
 use crate::config::{AffinityConfig, AffinityMode};
+use crate::routing::engine_ranking::CandidateLoads;
 use crate::state::kv_events::{
     BlockSizeOracle, CacheNamespace, PrefixLookupResult, RadixTreePrefixProvider,
 };
-use crate::state::load_monitor::engine_ranking::CandidateLoads;
 use crate::state::load_monitor::engine_reported_load::{
     EngineReportedLoadSnapshot, EngineReportedLoadTable,
 };

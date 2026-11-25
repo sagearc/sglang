@@ -328,7 +328,7 @@ impl RouterInflightLoadRegistry {
     }
 
     /// Drop a worker's per-worker counters entry. Called from
-    /// [`crate::workers::manager`] on `DiscoveryEvent::Removed` so the
+    /// [`crate::routing::manager`] on `DiscoveryEvent::Removed` so the
     /// `WorkerCounters` slot for a now-gone worker does not leak.
     ///
     /// Guards still alive for that worker remain valid; their drop tries

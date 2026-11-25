@@ -349,15 +349,7 @@ impl Bucket {
     }
 }
 
-/// Soft preference; nonpreferred buckets remain available for fallback.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SloPreference {
-    #[default]
-    Disabled,
-    SloFirst,
-    BestEffort,
-}
+pub use crate::config::SloPreference;
 
 impl SloPreference {
     fn penalty(self, matches: Option<bool>) -> u8 {

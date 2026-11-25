@@ -284,7 +284,7 @@ mod tests {
             WorkerControlService::new(Arc::clone(&registry), ExternalWorkerSource::Kubernetes);
         context.routing.worker_control = Some(Arc::clone(&control));
         let (discovery_tx, discovery_rx) = tokio::sync::mpsc::channel(4);
-        let manager = tokio::spawn(crate::workers::manager::run_with_config_and_control(
+        let manager = tokio::spawn(crate::routing::manager::run_with_config_and_control(
             discovery_rx,
             control_rx,
             Arc::clone(&control),
@@ -708,7 +708,7 @@ mod tests {
         context.routing.worker_control = Some(Arc::clone(&control));
         let context = Arc::new(context);
         let (discovery_tx, discovery_rx) = tokio::sync::mpsc::channel(1);
-        let manager = tokio::spawn(crate::workers::manager::run_with_config_and_control(
+        let manager = tokio::spawn(crate::routing::manager::run_with_config_and_control(
             discovery_rx,
             control_rx,
             Arc::clone(&control),
@@ -785,7 +785,7 @@ mod tests {
             WorkerControlService::new(Arc::clone(&registry), ExternalWorkerSource::Kubernetes);
         context.routing.worker_control = Some(Arc::clone(&control));
         let (discovery_tx, discovery_rx) = tokio::sync::mpsc::channel(4);
-        let manager = tokio::spawn(crate::workers::manager::run_with_config_and_control(
+        let manager = tokio::spawn(crate::routing::manager::run_with_config_and_control(
             discovery_rx,
             control_rx,
             Arc::clone(&control),
@@ -872,7 +872,7 @@ mod tests {
             WorkerControlService::new(Arc::clone(&registry), ExternalWorkerSource::Kubernetes);
         context.routing.worker_control = Some(Arc::clone(&control));
         let (discovery_tx, discovery_rx) = tokio::sync::mpsc::channel(4);
-        let manager = tokio::spawn(crate::workers::manager::run_with_config_and_control(
+        let manager = tokio::spawn(crate::routing::manager::run_with_config_and_control(
             discovery_rx,
             control_rx,
             Arc::clone(&control),
@@ -967,7 +967,7 @@ mod tests {
             WorkerControlService::new(Arc::clone(&registry), ExternalWorkerSource::Kubernetes);
         context.routing.worker_control = Some(Arc::clone(&control));
         let (discovery_tx, discovery_rx) = tokio::sync::mpsc::channel(4);
-        let manager = tokio::spawn(crate::workers::manager::run_with_config_and_control(
+        let manager = tokio::spawn(crate::routing::manager::run_with_config_and_control(
             discovery_rx,
             control_rx,
             Arc::clone(&control),
@@ -1056,7 +1056,7 @@ mod tests {
             WorkerControlService::new(Arc::clone(&registry), ExternalWorkerSource::Kubernetes);
         context.routing.worker_control = Some(Arc::clone(&control));
         let (discovery_tx, discovery_rx) = tokio::sync::mpsc::channel(2);
-        let manager = tokio::spawn(crate::workers::manager::run_with_config_and_control(
+        let manager = tokio::spawn(crate::routing::manager::run_with_config_and_control(
             discovery_rx,
             control_rx,
             Arc::clone(&control),

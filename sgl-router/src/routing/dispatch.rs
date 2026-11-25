@@ -16,6 +16,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 use tokio_util::sync::CancellationToken;
 
+use super::decode_gate::DecodeSlot;
 use crate::config::DpRankPolicy;
 use crate::policies::dp_rank::{expected_rank_tokens, select_dp_rank};
 use crate::proxy::grpc::{Additions, BootstrapFields};
@@ -29,20 +30,16 @@ use crate::server::metrics::{
 };
 use crate::server::routes::chat::{
     forward::{
-        dispatch_outcome, response_before_expiry, Blame, DispatchMetrics, Dispatched, Grpc, Http,
-        Leg, LoadGuards, RequestDurationGuard, Transport, X_DATA_PARALLEL_RANK, X_SGL_DECODE_URL,
+        dispatch_outcome, dispatch_plain, response_before_expiry, Blame, DispatchMetrics,
+        Dispatched, Grpc, Http, Leg, LoadGuards, RequestDurationGuard, Transport,
+        X_DATA_PARALLEL_RANK, X_SGL_DECODE_URL,
     },
-    preparation::{append_fields, generate_room_id, generate_room_id_for_rank, PreparedRequest},
+    preparation::{append_fields, PreparedRequest, CLASSIFY_PATH, EMBEDDINGS_PATH, RERANK_PATH},
 };
 use crate::state::kv_events::prefix_provider::RankDepths;
-use crate::workers::{DecodeSlot, DpRankGuard, Worker};
+use crate::workers::{DpRankGuard, Worker};
 
-/// A plain worker, or a prefill worker paired with a decode worker for PD.
-pub(crate) struct SelectedWorkers {
-    pub(crate) prefill: Arc<Worker>,
-    pub(crate) decode: Option<Arc<Worker>>,
-    pub(crate) track_dispatch_timestamps: bool,
-}
+pub(crate) use crate::server::routes::chat::forward::SelectedWorkers;
 
 pub(crate) async fn dispatch<T: PrefillTransport>(
     transport: T,
@@ -53,6 +50,19 @@ pub(crate) async fn dispatch<T: PrefillTransport>(
     request_started_at: Instant,
     duration: &Arc<RequestDurationGuard>,
 ) -> Result<Dispatched<T::Response>, ApiError> {
+    let dp_aware = ctx.config.model.dp_aware && request.accepts_dp_rank();
+    if workers.decode.is_none() && !dp_aware {
+        return dispatch_plain(
+            transport,
+            ctx,
+            request,
+            workers,
+            headers,
+            request_started_at,
+            duration,
+        )
+        .await;
+    }
     let SelectedWorkers {
         prefill,
         decode,
@@ -66,7 +76,6 @@ pub(crate) async fn dispatch<T: PrefillTransport>(
     }
     // Only the router chooses DP ranks; a client-supplied rank is never forwarded.
     headers.remove(X_DATA_PARALLEL_RANK);
-    let dp_aware = ctx.config.model.dp_aware && request.accepts_dp_rank();
     // The engine gives fan-out item i the room `room + i`, so in PD decode looks
     // for each item on a different prefill rank; one pinned rank would break that.
     let unpin_prefill = dp_aware && decode.is_some() && request.fans_out;
@@ -308,6 +317,25 @@ fn release_on_first_byte(
         }),
         None => first_byte,
     }
+}
+
+impl PreparedRequest {
+    /// Whether the engine endpoint honors a routed DP rank; embeddings, classify
+    /// and rerank take none.
+    fn accepts_dp_rank(&self) -> bool {
+        !matches!(self.path, EMBEDDINGS_PATH | CLASSIFY_PATH | RERANK_PATH)
+    }
+}
+
+/// The engine stores bootstrap rooms as signed int64 values.
+fn generate_room_id() -> u64 {
+    rand::random::<u64>() & (i64::MAX as u64)
+}
+
+/// A room with `room % dp_ranks == rank`, which is how decode finds the prefill rank.
+fn generate_room_id_for_rank(rank: u32, dp_ranks: u32) -> u64 {
+    let dp_ranks = u64::from(dp_ranks);
+    (generate_room_id() >> 1) / dp_ranks * dp_ranks + u64::from(rank)
 }
 
 struct ReleaseOnDrop(Option<DecodeSlot>);
@@ -723,6 +751,25 @@ fn prepend_prefill_logprobs(prefill_body: &[u8], decode_body: &[u8]) -> Option<V
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rank_aligned_room_ids_map_back_to_their_rank() {
+        for _ in 0..1_000 {
+            let room = generate_room_id_for_rank(6, 7);
+            assert!(room <= i64::MAX as u64 && room % 7 == 6);
+        }
+    }
+
+    #[test]
+    fn generate_room_id_stays_in_63_bit_range() {
+        for _ in 0..10_000 {
+            let r = generate_room_id();
+            assert!(
+                r <= i64::MAX as u64,
+                "generate_room_id() returned {r} > i64::MAX; would wrap negative as torch.int64",
+            );
+        }
+    }
+
     use super::*;
     use crate::discovery::WorkerMode;
     use axum::http::StatusCode;

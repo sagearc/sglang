@@ -6,7 +6,7 @@
 //! `policies_reorg` read it here.
 
 pub mod affinity_store;
-pub mod kv_events;
+pub use crate::routing::kv_events;
 pub mod load_monitor;
 
 pub use affinity_store::AffinityStore;

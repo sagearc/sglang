@@ -25,7 +25,8 @@
 //! `kv_events::discovery::fetch_event_config` directly (it returns
 //! `Result<Option<EventConfig>>`); the manager intentionally doesn't.
 
-use std::time::Duration;
+use super::{EngineProfile, WireProtocol};
+use std::{sync::Arc, time::Duration};
 
 use reqwest::header::{HeaderValue, AUTHORIZATION};
 use serde::Deserialize;
@@ -84,6 +85,18 @@ pub struct ServerInfo {
     /// Whether the engine's chat template renders a system message after the
     /// first; `false` when `/server_info` predates the field or did not answer.
     pub supports_inline_system: bool,
+}
+
+impl ServerInfo {
+    pub(crate) fn take_engine_profile(&mut self, protocol: WireProtocol) -> EngineProfile {
+        EngineProfile {
+            protocol,
+            dp_ranks: self.dp_ranks,
+            openai: self.openai.take().map(Arc::new),
+            grpc_port: self.grpc_port,
+            supports_inline_system: self.supports_inline_system,
+        }
+    }
 }
 
 /// PD classification derived from a worker's `/server_info` response.
@@ -470,6 +483,60 @@ pub(crate) struct KvEventsBlock {
     pub replay_endpoint_port_base: Option<u16>,
     pub block_size: u32,
     pub dp_size: u32,
+}
+
+/// Whether `worker_url` is one the router will dial in cleartext.
+///
+/// The scheme test cannot be `Url::parse(worker_url)?.scheme() == "http"`: a
+/// schemeless `worker-0.engines.svc:8000` parses with `worker-0.engines.svc`
+/// as the *scheme*, so that test answers "not cleartext" for a shape that is
+/// nothing of the sort. Normalize the way `parse_bootstrap_host` does — retry
+/// under an explicit `http://` — and read the scheme off that.
+///
+/// A schemeless URL therefore reads as cleartext here. That answer never
+/// reaches the wire: `proxy::parse_worker_url` is a bare `Url::parse`, which
+/// *accepts* `worker-0.engines.svc:8000` (scheme `worker-0.engines.svc`,
+/// opaque path `8000`), and the request then dies at `worker_url.join(path)`
+/// with `RelativeUrlWithCannotBeABaseBase` before any client is used. So
+/// `Some(true)` costs nothing today and stays correct if that path ever grows
+/// the same normalization; answering `None` would only mislabel the reason in
+/// the log.
+pub(crate) fn dials_cleartext(worker_url: &str) -> Option<bool> {
+    if worker_url.contains("://") {
+        return Url::parse(worker_url).ok().map(|u| u.scheme() == "http");
+    }
+    Url::parse(&format!("http://{worker_url}"))
+        .ok()
+        .map(|_| true)
+}
+
+/// Resolve the wire protocol for a worker from its `/server_info`
+/// (`enable_http2`) and whether the router dials it in cleartext
+/// (`dials_cleartext`, `None` when the URL did not parse).
+///
+/// Both inputs are fixed for the worker's lifetime, so this runs once per
+/// worker, before it is registered.
+///
+/// Upgrades to [`WireProtocol::H2c`] only when the engine self-reports
+/// `--enable-http2` **and** the worker URL is cleartext. h2c is HTTP/2 with
+/// prior knowledge — no negotiation — so sending it anywhere that is not
+/// known to serve it fails every request; the cleartext gate is what bounds
+/// that risk.
+///
+/// [`WireProtocol::Http1`] is the fallback for everything else, and it does
+/// not mean "HTTP/1.1 on the wire". It selects the negotiating client, which
+/// advertises ALPN `h2, http/1.1`, so an `https://` worker running
+/// `--enable-http2` reaches HTTP/2 over TLS on its own — the correct outcome,
+/// arrived at by negotiation rather than by assumption. Only cleartext workers
+/// need prior-knowledge h2c. See [`WireProtocol`].
+pub(crate) fn resolve_protocol(
+    enable_http2: Option<bool>,
+    cleartext: Option<bool>,
+) -> WireProtocol {
+    match (enable_http2, cleartext) {
+        (Some(true), Some(true)) => WireProtocol::H2c,
+        _ => WireProtocol::Http1,
+    }
 }
 
 #[cfg(test)]

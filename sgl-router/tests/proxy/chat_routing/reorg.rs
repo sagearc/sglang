@@ -10,7 +10,7 @@ use sgl_router::policies_reorg::admission::{
     AdmissionLimits, Decision, EngineAdmission, EngineMetrics,
 };
 use sgl_router::policies_reorg::{Pick, PickError, PickRequest, Policy, Rejection, Stage};
-use sgl_router::server::app_context::ChatRouting;
+use sgl_router::routing::ChatRouting;
 use std::sync::Mutex;
 
 mod session_aware;

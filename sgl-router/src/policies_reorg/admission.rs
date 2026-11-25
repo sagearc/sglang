@@ -7,7 +7,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+pub use crate::config::AdmissionLimits;
 
 use crate::state::load_monitor::engine_reported_load::EngineReportedLoadSnapshot;
 use crate::workers::Worker;
@@ -80,21 +80,6 @@ pub fn partition_admitted(
         }
     }
     Ok((admitted, rejections))
-}
-
-/// Per-engine caps; an unset limit is not checked and unknown metrics fail open.
-/// Each admits while the engine's load is below it: counts directly, usages as
-/// shares, in (0, 1], of the engine's reported capacity. Checks observe load;
-/// they do not reserve capacity, and the request itself may take an engine past
-/// a cap.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct AdmissionLimits {
-    pub max_running_usage: Option<f64>,
-    pub max_kv_usage: Option<f64>,
-    pub max_waiting_requests: Option<u64>,
-    pub max_pending_prefill_tokens: Option<u64>,
-    pub max_inflight_requests: Option<u64>,
 }
 
 impl AdmissionLimits {

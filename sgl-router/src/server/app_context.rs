@@ -3,7 +3,6 @@
 
 use crate::config::Config;
 use crate::proxy::Proxy;
-pub use crate::routing::ChatRouting;
 use crate::routing::RoutingState;
 use crate::server::inflight::InflightHttp;
 use crate::server::metrics::MetricsRegistry;
@@ -28,23 +27,14 @@ pub struct AppContext {
     pub preprocessor: Preprocessor,
     pub proxy: Arc<Proxy>,
     pub routing: RoutingState,
-    /// Per-worker active-load bookkeeping shared by the proxy, policies,
-    /// timeout janitor, and metrics.
     pub router_inflight_load: Arc<RouterInflightLoadRegistry>,
-    /// Lightweight Prometheus-format metrics registry served via
-    /// `/metrics`. Shared with the edge middleware (requests_total /
-    /// responses_total), the chat handler (worker_requests_total), the
-    /// active-load registry, policy-specific counters, and PD dispatch.
     pub metrics: Arc<MetricsRegistry>,
-    /// Open HTTP exchanges, on every route. What axum's graceful shutdown
-    /// is actually waiting on during the drain — `router_inflight_load` sees only the
-    /// proxied subset.
     pub inflight_http: Arc<InflightHttp>,
     readiness: AtomicU8,
 }
 
 impl AppContext {
-    pub(crate) fn from_parts(
+    pub fn from_parts(
         config: Config,
         tokenizers: Arc<TokenizerRegistry>,
         proxy: Arc<Proxy>,

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 The SGLang Authors
 // SPDX-License-Identifier: Apache-2.0
 
+use super::ChatRouting;
 use crate::buckets_reorg::BucketResolver;
 use crate::config::{SessionAffinityMode, DEFAULT_MIN_LOAD_CHOICES};
 use crate::discovery::{ModelId, WorkerId, WorkerMode};
@@ -10,7 +11,6 @@ use crate::policies::selection::{
 };
 use crate::policies::{Policy, PrefixLookupResult};
 use crate::routing::dispatch::SelectedWorkers;
-use crate::server::app_context::ChatRouting;
 use crate::server::metrics::PolicySelectionFailureReason;
 use crate::server::routes::chat::preparation::PreparedRequest;
 use crate::server::{app_context::AppContext, error::ApiError};
@@ -34,8 +34,8 @@ pub(crate) enum ModelRouting<'a> {
 
 impl<'a> ModelRouting<'a> {
     pub(crate) fn lookup(ctx: &'a AppContext, model: &ModelId) -> Result<Self, ApiError> {
-        let routing = match &ctx.chat_routing {
-            ChatRouting::Legacy => ctx.policies.get(model).map(Self::Legacy),
+        let routing = match &ctx.routing.chat_routing {
+            ChatRouting::Legacy => ctx.routing.policies.get(model).map(Self::Legacy),
             ChatRouting::Reorg(resolvers) => resolvers.get(model).map(Self::Reorg),
         };
         routing.ok_or_else(|| ApiError::ModelNotFound(model.0.clone()))
@@ -48,7 +48,7 @@ impl<'a> ModelRouting<'a> {
             // so a load-only bucket skips the body parse.
             Self::Reorg(resolver) => resolver.needs_request_tokens(),
         };
-        policy_needs_tokens || ctx.bucket_selector.is_enabled()
+        policy_needs_tokens || ctx.routing.bucket_selector.is_enabled()
     }
 
     /// Pick a plain worker, or a prefill worker followed by a decode peer in PD mode,
@@ -63,7 +63,8 @@ impl<'a> ModelRouting<'a> {
         match self {
             Self::Legacy(policy) => {
                 // Find healthy workers: the prefill pool in PD mode, otherwise the plain pool.
-                let resolver = PdPoolResolver::new(Arc::clone(&ctx.registry)).excluding(excluded);
+                let resolver =
+                    PdPoolResolver::new(Arc::clone(&ctx.routing.registry)).excluding(excluded);
                 let candidates = resolver
                     .prefill_candidates(&request.model)
                     .map_err(|error| pool_error(error, &request.model))?;
@@ -123,7 +124,7 @@ async fn select_workers(
 /// it. Called only once the whole selection succeeded, so a request that is
 /// never dispatched credits nobody.
 fn record_prefill_route(ctx: &AppContext, signal: Option<&PrefixLookupResult>, prefill_url: &str) {
-    if let (Some(provider), Some(signal)) = (&ctx.radix_tree_prefix_provider, signal) {
+    if let (Some(provider), Some(signal)) = (&ctx.routing.radix_tree_prefix_provider, signal) {
         provider.record_route(signal, prefill_url);
     }
 }
@@ -172,7 +173,11 @@ fn capture_load_snapshot(
         || candidates
             .iter()
             .any(|worker| worker.mode() == WorkerMode::Prefill);
-    needed.then(|| ctx.engine_reported_load.capture_snapshot(Instant::now()))
+    needed.then(|| {
+        ctx.routing
+            .engine_reported_load
+            .capture_snapshot(Instant::now())
+    })
 }
 
 struct RoutingContext<'a> {
@@ -188,7 +193,7 @@ impl<'a> RoutingContext<'a> {
     /// Header-derived selection inputs; prefix and load fields start empty.
     fn from_headers(ctx: &AppContext, headers: &'a HeaderMap) -> Result<Self, ApiError> {
         // Buckets group workers by token limits and service targets; disabled means one pool per role.
-        let (ttft_slo_ms, tps_slo) = if ctx.bucket_selector.is_enabled() {
+        let (ttft_slo_ms, tps_slo) = if ctx.routing.bucket_selector.is_enabled() {
             (
                 parse_optional_positive_u64_header(headers, &X_SGL_TTFT_SLO_MS, "TTFT SLO")?,
                 parse_optional_positive_f64_header(headers, &X_SGL_TPS_SLO, "TPS SLO")?,
@@ -230,7 +235,7 @@ fn pick_prefill_worker(
     select_prefill_worker(&PrefillSelectionInputs {
         policy,
         policy_kind: ctx.config.model.policy,
-        bucket_selector: ctx.bucket_selector.as_ref(),
+        bucket_selector: ctx.routing.bucket_selector.as_ref(),
         metrics: ctx.metrics.as_ref(),
         model_id: &request.model,
         body: Some(&request.body),
@@ -276,7 +281,7 @@ fn pick_decode_worker(
     let decode = select_decode_peer(&DecodeSelectionInputs {
         decode_policy_kind: ctx.config.model.decode_policy,
         allow_capacity_fallback,
-        bucket_selector: ctx.bucket_selector.as_ref(),
+        bucket_selector: ctx.routing.bucket_selector.as_ref(),
         model_id: &request.model,
         prefill_url: &prefill.url,
         decode_workers: &candidates,
@@ -302,11 +307,15 @@ async fn lookup_prefix_matches(
     let namespace = &request.cache_namespace;
     let tokens = request.tokens.as_ref();
     let remote = ctx
+        .routing
         .prefix_index
         .as_ref()
         .zip(tokens)
         .and_then(|(index, tokens)| {
-            let hashes = ctx.block_size_oracle.block_hashes(&tokens.ids, namespace)?;
+            let hashes = ctx
+                .routing
+                .block_size_oracle
+                .block_hashes(&tokens.ids, namespace)?;
             Some((index, hashes))
         });
     let signal = match remote {
@@ -329,6 +338,7 @@ async fn lookup_prefix_matches(
         }
         // Without usable indexer inputs, try the in-process radix tree.
         None => ctx
+            .routing
             .radix_tree_prefix_provider
             .as_ref()
             .zip(tokens)

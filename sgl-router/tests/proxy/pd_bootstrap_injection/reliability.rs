@@ -30,7 +30,8 @@ fn pd_ctx(prefill: &str, decode: &str, reorg: bool) -> Arc<AppContext> {
             None,
         )
         .unwrap();
-        mutable.chat_routing = ChatRouting::Reorg([(ModelId("tiny".into()), resolver)].into());
+        mutable.routing.chat_routing =
+            ChatRouting::Reorg([(ModelId("tiny".into()), resolver)].into());
     }
     ctx
 }
@@ -158,7 +159,7 @@ async fn pd_failure_returns_without_waiting_for_the_other_side() {
                 // record yet.
                 let abandoned: &[&str] = if prefill_blamed { &["cancelled"] } else { &[] };
                 assert_eq!(outcomes(&ctx, other.0, other.1), abandoned);
-                let decode_worker = ctx.registry.get(&WorkerId("d".into())).unwrap();
+                let decode_worker = ctx.routing.registry.get(&WorkerId("d".into())).unwrap();
                 assert_eq!(decode_worker.router_inflight_load(), 0);
             }
         }
@@ -195,7 +196,7 @@ async fn prefill_failure_aborts_decode_before_its_first_token() {
                 let response = request.await.unwrap().unwrap();
                 assert_eq!(response.status(), StatusCode::BAD_REQUEST);
             }
-            let workers = ctx.registry.workers_for(&ModelId("tiny".into()));
+            let workers = ctx.routing.registry.workers_for(&ModelId("tiny".into()));
             wait_until(|| {
                 !decode.abort_log.lock().unwrap().is_empty()
                     && workers.iter().all(|w| w.router_inflight_load() == 0)
@@ -238,7 +239,7 @@ async fn prefill_failure_after_decode_first_token_keeps_the_stream() {
         let mut body = response.into_body().into_data_stream();
         assert_eq!(body.next().await.unwrap().unwrap(), "data: a\n\n");
         release.notify_one();
-        let prefill = ctx.registry.get(&WorkerId("p".into())).unwrap();
+        let prefill = ctx.routing.registry.get(&WorkerId("p".into())).unwrap();
         wait_until(|| prefill.router_inflight_load() == 0).await;
         assert_eq!(body.next().await.unwrap().unwrap(), "data: [DONE]\n\n");
         assert!(body.next().await.is_none());
@@ -261,7 +262,7 @@ async fn decode_failure_leaves_prefill_running() {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let prefill = ctx.registry.get(&WorkerId("p".into())).unwrap();
+        let prefill = ctx.routing.registry.get(&WorkerId("p".into())).unwrap();
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(prefill.router_inflight_load(), 1);
         release.notify_one();

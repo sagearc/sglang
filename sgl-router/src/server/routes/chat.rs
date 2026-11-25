@@ -4,7 +4,6 @@
 pub(crate) mod forward;
 mod openai;
 pub(crate) mod preparation;
-pub(crate) use crate::routing::selection::pool_error;
 use crate::routing::selection::ModelRouting;
 
 pub(super) use preparation::enforce_minimax_m31_thinking;
@@ -322,7 +321,7 @@ fn canonicalize_model_alias(
 
 /// Prefill and decode engines serve generation only.
 fn require_plain_workers(ctx: &AppContext, model: &ModelId, path: &str) -> Result<(), ApiError> {
-    let registered = ctx.registry.workers_for(model);
+    let registered = ctx.routing.registry.workers_for(model);
     if registered.iter().any(|w| w.mode() != WorkerMode::Plain) {
         return Err(ApiError::BadRequest(format!(
             "{path} is not served by prefill-decode workers"
@@ -333,7 +332,7 @@ fn require_plain_workers(ctx: &AppContext, model: &ModelId, path: &str) -> Resul
 
 /// The OpenAI settings every worker of `model` reports; `None` if any is unread or they differ.
 fn model_openai_settings(ctx: &AppContext, model: &ModelId) -> Option<Arc<OpenAiSettings>> {
-    let workers = ctx.registry.workers_for(model);
+    let workers = ctx.routing.registry.workers_for(model);
     let first = Arc::clone(workers.first()?.openai_settings()?);
     let agree = workers.iter().all(|w| w.openai_settings() == Some(&first));
     static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -511,7 +510,7 @@ mod tests {
             Arc::new(TokenizerRegistry::load_from_config(&ctx.config).unwrap()),
             Arc::clone(&ctx.metrics),
         );
-        ctx.policies.insert(
+        ctx.routing.policies.insert(
             ModelId("stub-model".into()),
             Arc::new(crate::policies::round_robin::RoundRobinPolicy::new()),
         );

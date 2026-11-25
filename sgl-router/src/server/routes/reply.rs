@@ -22,6 +22,7 @@ pub(super) const MAX_REPLY_BYTES: usize = MAX_CHAT_BODY_BYTES;
 /// the first; a worker that does not report it counts as no.
 pub(super) fn model_supports_inline_system(ctx: &AppContext) -> bool {
     let workers = ctx
+        .routing
         .registry
         .workers_for(&ModelId(ctx.config.model.id.clone()));
     !workers.is_empty() && workers.iter().all(|w| w.supports_inline_system())

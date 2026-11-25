@@ -138,8 +138,9 @@ pub(crate) async fn dispatch<T: PrefillTransport>(
 
     // In PD mode, prefill runs independently and decode supplies the client response.
     let stream_abort = CancellationToken::new();
-    let decode_slot = (pd.is_some() && ctx.decode_gate.is_enabled() && engine_rid.is_some())
-        .then(DecodeSlot::default);
+    let decode_slot =
+        (pd.is_some() && ctx.routing.decode_gate.is_enabled() && engine_rid.is_some())
+            .then(DecodeSlot::default);
     let mut unanswered = ReleaseOnDrop(decode_slot.clone());
     let (response_worker, response_leg, response_load_guards, prefill_task) =
         if let Some((decode, bootstrap)) = pd {
@@ -281,7 +282,7 @@ async fn admit_decode(
         .router_inflight_load
         .stale_request_timeout()
         .saturating_sub(request_started_at.elapsed());
-    let admit = ctx.decode_gate.admit(&prefill.id, rank, slot);
+    let admit = ctx.routing.decode_gate.admit(&prefill.id, rank, slot);
     tokio::select! {
         admitted = tokio::time::timeout(budget, admit) => admitted.map_err(|_| {
             ctx.metrics
@@ -447,7 +448,7 @@ fn prompt_dp_rank(
         .into_iter()
         .flatten()
         .find_map(|name| nonempty_header(headers, name));
-    let placement = match (key, &ctx.dp_rank_prefix_provider, &request.tokens) {
+    let placement = match (key, &ctx.routing.dp_rank_prefix_provider, &request.tokens) {
         (None, Some(provider), Some(tokens)) => {
             provider.rank_depths(&tokens.ids, &request.cache_namespace, &worker.url)
         }
@@ -463,7 +464,7 @@ fn prompt_dp_rank(
         model.dp_rank_policy,
     );
     if let (Some(rank), Some(provider), Some(tokens)) =
-        (rank, &ctx.dp_rank_prefix_provider, &request.tokens)
+        (rank, &ctx.routing.dp_rank_prefix_provider, &request.tokens)
     {
         provider.record_rank(&tokens.ids, &request.cache_namespace, &worker.url, rank);
     }
@@ -479,7 +480,8 @@ fn rank_tokens(ctx: &AppContext, worker: &Worker, policy: DpRankPolicy) -> Vec<(
     if policy != DpRankPolicy::LeastTokens || worker.dp_ranks() <= 1 {
         return Vec::new();
     }
-    ctx.engine_reported_load
+    ctx.routing
+        .engine_reported_load
         .fresh_rank_loads(&worker.url, Instant::now())
         .map_or_else(Vec::new, |loads| expected_rank_tokens(worker, &loads))
 }

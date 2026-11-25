@@ -315,16 +315,18 @@ async fn chat_commits_the_admitted_prefill_backup() {
             total_prefill_busy_us,
         }),
     };
-    fixture.ctx.engine_reported_load.set(
+    fixture.ctx.routing.engine_reported_load.set(
         &fixture.workers[0].url,
         0,
         native_load(1, 1),
         now - Duration::from_secs(1),
     );
-    fixture
-        .ctx
-        .engine_reported_load
-        .set(&fixture.workers[0].url, 0, native_load(2, 2), now);
+    fixture.ctx.routing.engine_reported_load.set(
+        &fixture.workers[0].url,
+        0,
+        native_load(2, 2),
+        now,
+    );
 
     assert_eq!(send_chat(&fixture.ctx).await, StatusCode::OK);
     assert!(fixture.backends[0]
@@ -359,7 +361,7 @@ async fn capacity_exhaustion_does_not_return_503() {
     })
     .await;
     for worker in &fixture.workers {
-        fixture.ctx.engine_reported_load.set(
+        fixture.ctx.routing.engine_reported_load.set(
             &worker.url,
             0,
             LoadStat {
@@ -442,7 +444,7 @@ async fn chat_records_cache_candidates_exhausted() {
         })
     })
     .await;
-    fixture.ctx.engine_reported_load.set(
+    fixture.ctx.routing.engine_reported_load.set(
         &fixture.workers[0].url,
         0,
         LoadStat {

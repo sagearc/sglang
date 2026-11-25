@@ -41,7 +41,7 @@ async fn slo_headers_order_complete_pd_buckets_and_validate_before_dispatch() {
     let mut resolver = BucketResolver::new(vec![decode, prefill]).unwrap();
     resolver.ttft_slo = SloPreference::SloFirst;
     resolver.tps_slo = SloPreference::SloFirst;
-    ctx.chat_routing = ChatRouting::Reorg([(ModelId("tiny".into()), resolver)].into());
+    ctx.routing.chat_routing = ChatRouting::Reorg([(ModelId("tiny".into()), resolver)].into());
     let app = build_router(Arc::new(ctx));
     for (ttft, tps) in [("0", "100"), ("50", "NaN"), ("50", "0"), ("abc", "100")] {
         let mut req = request(body("hi"));
@@ -115,7 +115,7 @@ async fn preferred_bucket_rejection_falls_back_and_disabled_headers_are_ignored(
         if enabled {
             resolver.ttft_slo = SloPreference::SloFirst;
         }
-        ctx.chat_routing = ChatRouting::Reorg([(ModelId("tiny".into()), resolver)].into());
+        ctx.routing.chat_routing = ChatRouting::Reorg([(ModelId("tiny".into()), resolver)].into());
         let app = build_router(Arc::new(ctx));
         let mut req = request(body("hi"));
         req.headers_mut().insert(

@@ -214,8 +214,8 @@ fn build_cache_ctx_with_affinity(
         }),
         ..Default::default()
     });
-    context.prefix_index = Some(prefix_index);
-    context.block_size_oracle.try_set(1).unwrap();
+    context.routing.prefix_index = Some(prefix_index);
+    context.routing.block_size_oracle.try_set(1).unwrap();
     Arc::new(context)
 }
 
@@ -246,7 +246,7 @@ fn set_native_load_with_waiting(
     max_total_num_tokens: u64,
     num_waiting_uncached_tokens: u64,
 ) {
-    ctx.engine_reported_load.set(
+    ctx.routing.engine_reported_load.set(
         worker_url,
         0,
         LoadStat {

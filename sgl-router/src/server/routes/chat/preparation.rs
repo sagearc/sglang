@@ -258,16 +258,20 @@ pub(crate) struct PreparedRequest {
     pub(crate) model: ModelId,
     pub(crate) streaming: bool,
     /// Output budget, for decode KV; unknown if any prompt leaves it unset.
+    #[allow(dead_code, reason = "consumed by fleet routing")]
     pub(crate) output_tokens: Option<u64>,
     pub(crate) body: Bytes,
     pub(crate) tokens: Option<RequestTokens>,
     /// The engine KV namespace `tokens` are cached under.
+    #[allow(dead_code, reason = "consumed by fleet routing")]
     pub(crate) cache_namespace: CacheNamespace,
     /// Token count for routing/load accounting; estimated from body size when unavailable.
     pub(crate) input_token_count: usize,
     /// The longest prompt, for bucket and context checks.
+    #[allow(dead_code, reason = "consumed by fleet routing")]
     pub(crate) sequence_token_count: usize,
     /// The longest prompt plus its own output budget.
+    #[allow(dead_code, reason = "consumed by fleet routing")]
     pub(crate) expected_peak_sequence_tokens: Option<u64>,
     pub(crate) caller_set_rid: bool,
     pub(crate) fans_out: bool,

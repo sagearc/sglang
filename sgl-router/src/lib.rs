@@ -16,5 +16,7 @@ pub mod tokenizer;
 pub mod workers;
 
 pub mod discovery;
+#[cfg_attr(not(feature = "routing"), path = "routing/single.rs")]
 pub mod routing;
+#[cfg(feature = "routing")]
 pub use routing::{buckets_reorg, policies, policies_reorg};

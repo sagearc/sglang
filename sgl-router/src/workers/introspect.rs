@@ -57,6 +57,8 @@ const FETCH_BACKOFF_BASE: Duration = Duration::from_millis(100);
 /// for prefill workers) — see `manager::register_one`.
 #[derive(Debug, Clone, Default)]
 pub struct ServerInfo {
+    /// Whether /server_info describes a plain worker, or was unavailable.
+    pub accepts_plain_requests: Option<bool>,
     pub served_model_name: Option<String>,
     pub event_config: Option<EventConfig>,
     pub disaggregation_role: Option<DisaggregationRole>,
@@ -170,16 +172,18 @@ impl WorkerIntrospector {
             .as_ref()
             .filter(|info| info.get("incremental_streaming_output").is_some())
             .and_then(|info| OpenAiSettings::deserialize(info).ok());
-        let parsed: ServerInfoBody = parsed
-            .and_then(|info| {
-                serde_json::from_value(info)
-                    .map_err(|e| {
-                        warn!(worker_url = %worker_url, error = %e,
+        let parsed: Option<ServerInfoBody> = parsed.and_then(|info| {
+            serde_json::from_value(info)
+                .map_err(|e| {
+                    warn!(worker_url = %worker_url, error = %e,
                         "introspect: /server_info fields did not parse; treating it as absent")
-                    })
-                    .ok()
-            })
-            .unwrap_or_default();
+                })
+                .ok()
+        });
+        let accepts_plain_requests = parsed
+            .as_ref()
+            .map(|info| matches!(info.disaggregation_mode.as_deref(), None | Some("null")));
+        let parsed = parsed.unwrap_or_default();
 
         // `/model_info` is the effective identity; `/server_info` is the launch
         // record, kept as the fallback for workers that predate the field
@@ -213,6 +217,7 @@ impl WorkerIntrospector {
         );
 
         ServerInfo {
+            accepts_plain_requests,
             served_model_name,
             event_config,
             disaggregation_role,

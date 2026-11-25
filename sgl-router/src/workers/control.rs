@@ -284,10 +284,12 @@ impl WorkerControlService {
         )
     }
 
+    #[allow(dead_code, reason = "used by fleet routing")]
     pub(crate) fn registry(&self) -> Arc<WorkerRegistry> {
         Arc::clone(&self.registry)
     }
 
+    #[allow(dead_code, reason = "used by fleet routing")]
     pub(crate) fn has_managed_url(&self, url: &str) -> bool {
         self.state
             .lock()
